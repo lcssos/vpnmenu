@@ -1,0 +1,17 @@
+{
+  "_readme": "示例配置。复制到本机后按实际环境修改，用菜单栏「配置 -> 导入配置…」导入。账号密码不写在这里：导入后在「设置账号…」里录入，存 macOS 钥匙串。配置只保存在本机（~/Library/Application Support/VPNMenu/profiles/），不会进入 App 包或公开仓库。",
+  "schema": 1,
+  "name": "示例 VPN",
+  "server": "vpn.example.com",
+  "port": 4430,
+  "tunInterface": "utun4",
+  "socksBind": "127.0.0.1:1090",
+  "httpBind": "127.0.0.1:1091",
+  "proxyDomains": [
+    "legacy.example.com"
+  ],
+  "domains": [
+    "app.example.com",
+    "db.example.com"
+  ]
+}

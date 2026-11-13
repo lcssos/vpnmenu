@@ -1,0 +1,103 @@
+#!/bin/bash
+# 由 App 通过 sudo -n 以 root 调用（sudoers 只放行本脚本和 zc-vpn-off）
+#
+# 连接参数从 stdin 读入，每行一个 key=value，由 App 从本机配置组装：
+#   ACCOUNT=用户名          （必填）
+#   PASSWORD=密码           （必填）
+#   SERVER=vpn.example.com  （必填）
+#   PORT=4430               （可选）
+#   TUN_IF=utun4            （可选）
+#   SOCKS_BIND=127.0.0.1:1090（可选）
+#   HTTP_BIND=127.0.0.1:1091 （可选）
+#   DOMAIN=app.example.com     （可重复）
+#   PROXY_DOMAIN=old.example.com（可重复）
+#
+# 安全约定：这里只按白名单取值并校验格式，**绝不 source/eval 任何配置文件**。
+# 配置虽然由 App 从用户可写的 JSON 解析而来，但 root 侧看到的是纯数据。
+set -uo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PIDFILE=/var/run/zju-connect.pid
+
+is_host() {
+  [[ "$1" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]]
+}
+is_bind() {
+  [[ "$1" =~ ^[A-Za-z0-9.]+:[0-9]{1,5}$ ]]
+}
+
+if [[ -f "$PIDFILE" ]] && /bin/kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+  echo "already running"
+  exit 0
+fi
+
+VPN_ACCOUNT=""
+VPN_SECRET=""
+VPN_SERVER=""
+VPN_PORT="4430"
+VPN_IF="utun4"
+SOCKS_BIND="127.0.0.1:1090"
+HTTP_BIND="127.0.0.1:1091"
+VPN_DOMAINS=""
+VPN_PROXY_DOMAINS=""
+
+while IFS= read -r line || [[ -n "$line" ]]; do
+  line="${line%$'\r'}"
+  [[ -z "$line" ]] && continue
+  if [[ "$line" != *=* ]]; then
+    echo "malformed input line" >&2
+    exit 2
+  fi
+  key="${line%%=*}"
+  val="${line#*=}"
+  case "$key" in
+    ACCOUNT)      VPN_ACCOUNT="$val" ;;
+    PASSWORD)     VPN_SECRET="$val" ;;
+    SERVER)       VPN_SERVER="$val" ;;
+    PORT)         VPN_PORT="$val" ;;
+    TUN_IF)       VPN_IF="$val" ;;
+    SOCKS_BIND)   SOCKS_BIND="$val" ;;
+    HTTP_BIND)    HTTP_BIND="$val" ;;
+    DOMAIN)       [[ -n "$val" ]] && VPN_DOMAINS="$VPN_DOMAINS $val" ;;
+    PROXY_DOMAIN) [[ -n "$val" ]] && VPN_PROXY_DOMAINS="$VPN_PROXY_DOMAINS $val" ;;
+    *)
+      echo "unknown field: $key" >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ -z "$VPN_ACCOUNT" || -z "$VPN_SECRET" ]]; then
+  echo "missing credentials" >&2
+  exit 2
+fi
+if ! is_host "$VPN_SERVER"; then
+  echo "invalid server: $VPN_SERVER" >&2
+  exit 2
+fi
+if [[ ! "$VPN_PORT" =~ ^[0-9]{1,5}$ ]] || (( VPN_PORT < 1 || VPN_PORT > 65535 )); then
+  echo "invalid port: $VPN_PORT" >&2
+  exit 2
+fi
+if [[ ! "$VPN_IF" =~ ^utun[0-9]{1,3}$ ]]; then
+  echo "invalid tun interface: $VPN_IF" >&2
+  exit 2
+fi
+if ! is_bind "$SOCKS_BIND" || ! is_bind "$HTTP_BIND"; then
+  echo "invalid listen address" >&2
+  exit 2
+fi
+for d in $VPN_DOMAINS $VPN_PROXY_DOMAINS; do
+  if ! is_host "$d"; then
+    echo "invalid domain: $d" >&2
+    exit 2
+  fi
+done
+
+export VPN_ACCOUNT VPN_SECRET VPN_SERVER VPN_PORT VPN_IF SOCKS_BIND HTTP_BIND
+export VPN_DOMAINS VPN_PROXY_DOMAINS
+
+nohup "$DIR/zc-tun.sh" </dev/null >/dev/null 2>&1 &
+sleep 1
+unset VPN_SECRET
+echo "started"

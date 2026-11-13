@@ -1,0 +1,11 @@
+#!/bin/bash
+# 状态查询（普通用户即可运行）
+PIDFILE=/var/run/zju-connect.pid
+
+# 注意：普通用户对 root 进程执行 kill -0 会返回 EPERM，必须用 ps 判断
+if [[ -f "$PIDFILE" ]] && ps -p "$(cat "$PIDFILE")" >/dev/null 2>&1; then
+  echo "connected"
+  exit 0
+fi
+echo "disconnected"
+exit 1

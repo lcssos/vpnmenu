@@ -1,0 +1,24 @@
+# 构建产物（由 tools/build.sh 生成）
+build/
+package/
+dist/
+vendor/
+
+# 图标产物（由 tools/make-icon.swift + sips/iconutil 生成）
+assets/icon-1024.png
+assets/VPNMenu.icns
+assets/VPNMenu.iconset/
+
+# 凭据（正常不会存在；防误提交）
+.pw
+*.pw
+
+# 本机 VPN 配置（保存在 Application Support，这里只是防手滑）
+profiles/
+*.vpnprofile.json
+
+# macOS
+.DS_Store
+
+# 图标生成器的编译产物
+tools/make-icon

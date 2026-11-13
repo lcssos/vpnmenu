@@ -1,0 +1,19 @@
+#!/bin/bash
+# 由 App 通过 sudo -n 以 root 调用
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PIDFILE=/var/run/zju-connect.pid
+
+if [[ -f "$PIDFILE" ]]; then
+  PID=$(cat "$PIDFILE")
+  /bin/kill "$PID" 2>/dev/null
+  for _ in $(seq 1 20); do
+    /bin/kill -0 "$PID" 2>/dev/null || break
+    sleep 0.5
+  done
+  /bin/kill -9 "$PID" 2>/dev/null
+  rm -f "$PIDFILE"
+fi
+
+# 兜底：清掉可能残留的进程（只匹配本 App 内的二进制）
+pkill -f "$DIR/zju-connect" 2>/dev/null
+echo "stopped"
