@@ -22,7 +22,7 @@ esac
 # 1) 先停掉正在运行的实例（含旧位置）
 "$VPN_DIR/zc-vpn-off" >/dev/null 2>&1 || true
 pkill -f '/usr/local/libexec/zju-connect/' 2>/dev/null || true
-rm -f /var/run/zju-connect.pid
+rm -f /var/run/zju-connect.pid /var/run/zju-connect.ready
 
 # 2) 清理旧版散落在系统里的组件
 rm -f  /etc/sudoers.d/zc-vpn

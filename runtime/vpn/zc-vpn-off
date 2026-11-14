@@ -4,11 +4,12 @@
 # 由 App 通过 sudo -n 以 root 调用
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PIDFILE=/var/run/zju-connect.pid
+READYFILE=/var/run/zju-connect.ready
 
 if [[ -f "$PIDFILE" ]]; then
   PID=$(cat "$PIDFILE")
   # pidfile 里是 zc-tun.sh 包装脚本的 pid；崩溃后 PID 可能被系统复用，先确认再杀
-  if ps -p "$PID" -o command= 2>/dev/null | grep -qF "$DIR/zc-tun.sh"; then
+  if ps -ww -p "$PID" -o command= 2>/dev/null | grep -qF "$DIR/zc-tun.sh"; then
     /bin/kill "$PID" 2>/dev/null
     for _ in $(seq 1 20); do
       /bin/kill -0 "$PID" 2>/dev/null || break
@@ -16,8 +17,8 @@ if [[ -f "$PIDFILE" ]]; then
     done
     /bin/kill -9 "$PID" 2>/dev/null
   fi
-  rm -f "$PIDFILE"
 fi
+rm -f "$PIDFILE" "$READYFILE"
 
 # 兜底：清掉可能残留的进程（只匹配本 App 内的二进制）
 pkill -f "$DIR/zju-connect" 2>/dev/null

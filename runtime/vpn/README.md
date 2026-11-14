@@ -5,12 +5,22 @@ App 内所有运行组件都在这个目录，安装后会被 chown 成 root:whe
 | 文件 | 作用 |
 |---|---|
 | `zju-connect` | 通用二进制（x86_64 + arm64），替代 EasyConnect 客户端 |
-| `zc-tun.sh` | 启动 TUN、等隧道就绪、注入域名 /32 路由（root） |
+| `zc-tun.sh` | 启动 TUN、等隧道就绪、写就绪标记、注入域名 /32 路由（root） |
 | `zc-vpn-on` / `zc-vpn-off` | 启停入口，sudoers 只放行这两个 |
-| `zc-vpn-status` | 命令行状态查询（普通用户可跑）；App 现在进程内检查状态，脚本保留给排障 |
+| `zc-vpn-status` | 命令行状态查询（普通用户可跑）；输出 `connected` / `connecting` / `disconnected`，退出码 `0` / `2` / `1`。App 现在进程内检查状态，脚本保留给排障 |
 | `zc-dns-restore` | 按启动前快照还原被 `-dns-hijack` 改写的系统 DNS（root，崩溃兜底） |
 | `install.sh` | 一次性安装：权限、sudoers、清理旧版组件 |
-| `uninstall.sh` | 撤销 sudoers 规则并停止 VPN |
+| `uninstall.sh` | 停止 VPN、撤销 sudoers 规则、移除登录自启（需要 root，会自行提权） |
+
+### 就绪标记
+
+`zc-tun.sh` 要等 utun 出现、DNS 可用、初始 `/32` 路由写完，才写
+`/var/run/zju-connect.ready`（内容为 `包装脚本pid zju-connect进程pid`）。
+App 和 `zc-vpn-status` 都以这个标记判断「已连接」，而不只是看进程活着。
+
+启动过程中 zju-connect 提前退出（认证失败、服务端拒绝等）或 utun 40 秒内没出现时，
+`zc-tun.sh` 会记录日志并直接退出，不会先报已连接再等超时。退出时 pid 文件和就绪标记
+都会被清理。
 
 ## 第三方组件
 
@@ -61,7 +71,10 @@ App 首次点「连接」会弹管理员密码，以 root 运行 `install.sh`：
 
 - `/etc/sudoers.d/vpnmenu`（免密规则，必须由系统读取）
 - `/var/run/zju-connect.pid`（运行时 PID）
-- `~/Library/Logs/VPNMenu/zju-connect.log`（日志）
+- `/var/run/zju-connect.ready`（隧道就绪标记）
+- `~/Library/Logs/VPNMenu/zju-connect.log`（日志，超过 5MB 时轮转为 `.log.1`）
+- `~/Library/LaunchAgents/com.lcssos.vpnmenu.plist`（登录自启，`install.sh` 不碰它，
+  `uninstall.sh` 会删除）
 - `~/Library/Application Support/VPNMenu/profiles/`（本机配置，App 升级不会动它）
 
 ## 换一台电脑

@@ -9,6 +9,9 @@ set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PIDFILE=/var/run/zju-connect.pid
+# 隧道真正可用（utun 就绪、初始 /32 路由写好）后才写这个标记。
+# App 和 zc-vpn-status 都以它为准，避免把“进程还在等 utun”误报成已连接。
+READYFILE=/var/run/zju-connect.ready
 
 : "${VPN_SERVER:?缺少服务器地址}"
 VPN_PORT="${VPN_PORT:-4430}"
@@ -36,6 +39,8 @@ LOG="$LOGDIR/zju-connect.log"
 if [[ -f "$PIDFILE" ]] && /bin/kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
   exit 0
 fi
+# 清掉上一次可能残留的就绪标记，等本次 utun / 路由真正就绪后再写
+rm -f "$READYFILE"
 echo "$$" > "$PIDFILE"
 
 # 账号/密码由 zc-vpn-on 从 App 的 stdin 读入后通过环境变量传入，不落盘。
@@ -87,18 +92,28 @@ VPN_PID=$!
 cleanup() {
   /bin/kill "$VPN_PID" 2>/dev/null
   wait "$VPN_PID" 2>/dev/null
-  rm -f "$PIDFILE"
+  rm -f "$PIDFILE" "$READYFILE"
   # 正常退出时 zju-connect 已自己清过 DNS，这一步是 panic/强杀时的兜底
   /bin/bash "$DIR/zc-dns-restore" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 trap 'exit 0' TERM INT
 
-# 等 utun 出现
+# 等 utun 出现；期间如果 zju-connect 已经退出（如认证失败），立刻失败返回，
+# 不要让包装脚本继续空等 40+20 秒、把状态误报成“连接中”。
+UTUN_OK=no
 for _ in $(seq 1 40); do
-  ifconfig "$VPN_IF" >/dev/null 2>&1 && break
+  if ifconfig "$VPN_IF" >/dev/null 2>&1; then UTUN_OK=yes; break; fi
+  if ! /bin/kill -0 "$VPN_PID" 2>/dev/null; then
+    echo "zju-connect exited before tun interface $VPN_IF appeared" >> "$LOG"
+    exit 1
+  fi
   sleep 1
 done
+if [[ "$UTUN_OK" != yes ]]; then
+  echo "tun interface $VPN_IF did not appear within 40s" >> "$LOG"
+  exit 1
+fi
 
 # 内网 DNS 就是隧道接口自己的地址；每个会话分配到的虚拟 IP 可能不同
 # （见过 2.0.1.1 / 2.0.1.2），不能写死
@@ -110,6 +125,10 @@ if [[ ${#DOMAINS[@]} -gt 0 ]]; then
   for _ in $(seq 1 20); do
     dig @"$VPN_DNS" +time=2 +tries=1 +short "${DOMAINS[0]}" 2>/dev/null \
       | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' && break
+    if ! /bin/kill -0 "$VPN_PID" 2>/dev/null; then
+      echo "zju-connect exited during DNS readiness wait" >> "$LOG"
+      exit 1
+    fi
     sleep 1
   done
 fi
@@ -132,6 +151,14 @@ add_domain_routes() {
 }
 
 add_domain_routes
+
+# 到这里才认为隧道可用：写入就绪标记（包装脚本 PID + zju-connect PID）
+if ! /bin/kill -0 "$VPN_PID" 2>/dev/null; then
+  echo "zju-connect exited before ready marker" >> "$LOG"
+  exit 1
+fi
+printf '%s %s\n' "$$" "$VPN_PID" > "$READYFILE"
+chmod 644 "$READYFILE" 2>/dev/null || true
 
 # 每 5 分钟刷新一次，应对 DNS 轮换 / 路由失效；同时每 5 秒确认 zju-connect 还活着。
 # 不用后台刷新子进程：那样父脚本被 kill -9 时会留下孤儿，TERM 也可能被 sleep 推迟。

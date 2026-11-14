@@ -260,6 +260,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var busyFrames: [NSImage] = []
     private var busyFrameIndex = 0
     private var busy = false
+    private var waitingReady = false   // 连接命令已返回，正在等隧道就绪
+    private var cancelWait = false     // 用户主动断开，抑制“连接失败”提示
+    private var quitting = false       // 正在断开并退出
     private var lastIconLog = ""
     private var lastDNSRepair = Date.distantPast
 
@@ -289,6 +292,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // pidfile 里是 root 包装脚本 zc-tun.sh 的 PID；`kill(0)` 做存活检查，
     // `sysctl` 读启动时间识别 PID 复用，`ps` 只在首次见到某个进程实例时校验一次命令行。
     private let statusPidFile = "/var/run/zju-connect.pid"
+    private let readyFile = "/var/run/zju-connect.ready"
     private var statusVerifiedPID: pid_t = -1
     private var statusVerifiedStart: UInt64?
     private var statusVerifiedAlive = false
@@ -341,7 +345,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         reinstallItem.target = self
         menu.addItem(reinstallItem)
 
-        let quitItem = NSMenuItem(title: "退出", action: #selector(quit), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "退出并断开 VPN", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
 
@@ -362,6 +366,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             self?.refresh()
+        }
+
+        // 只有一个配置时，启动后自动连接（登录自启的常见场景）。
+        // 等一次轮询稳定后再做，避免和启动时的状态检查抢。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            self.autoConnectIfNeeded()
         }
 
         DistributedNotificationCenter.default().addObserver(
@@ -556,21 +566,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refresh() {
         reloadProfiles()
-        let connected = vpnProcessAlive()
-        if !connected && hasStaleVPNDNS() { repairStaleDNS() }
-        connectItem.isEnabled = !connected && !busy
-        disconnectItem.isEnabled = connected && !busy
+        let processAlive = vpnProcessAlive()
+        let ready = currentVPNPID().map { vpnTunnelReady($0) } ?? false
+        let connected = processAlive && ready
+        // DNS 兜底只在完全没有包装脚本时做；连接中 / 已连接都不能碰
+        if !processAlive && hasStaleVPNDNS() { repairStaleDNS() }
+        connectItem.isEnabled = !processAlive && !busy
+        // 启动等待期间也允许断开：隧道迟迟不就绪时用户要能取消
+        disconnectItem.isEnabled = processAlive && (!busy || waitingReady)
         reinstallItem.isEnabled = !busy
         // 操作进行中：保留「连接中…/断开中…」文字和旋转图标，不被轮询覆盖
         guard !busy else { return }
         if connected {
+            stopBusyAnimation()
             statusLine.title = "VPN：已连接"
-        } else if profiles.isEmpty {
-            statusLine.title = "VPN：未配置"
+            setIcon(connected: true)
+        } else if processAlive {
+            statusLine.title = "VPN：连接中…"
+            // 连接不一定由本进程发起（例如 App 重启时隧道正在建立），
+            // 只要还没就绪就让图标持续闪烁。
+            startBusyAnimation()
         } else {
-            statusLine.title = "VPN：未连接"
+            stopBusyAnimation()
+            statusLine.title = profiles.isEmpty ? "VPN：未配置" : "VPN：未连接"
+            setIcon(connected: false)
         }
-        setIcon(connected: connected)
     }
 
     private func currentVPNPID() -> pid_t? {
@@ -623,11 +643,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return statusVerifiedAlive
     }
 
-    /// 完整校验（pidfile + 存活 + 命令行），不碰缓存，可在后台线程调用。
-    private func vpnProcessVerified() -> Bool {
+    /// 就绪标记由 zc-tun.sh 在 utun 就绪、初始路由写好后写入，内容是「包装脚本 PID 子进程 PID」。
+    /// 只有标记里的 PID 和当前 pidfile 一致，才算这次连接已经可用。
+    private func vpnTunnelReady(_ pid: pid_t) -> Bool {
+        guard let text = try? String(contentsOfFile: readyFile, encoding: .utf8) else { return false }
+        let first = text.split(whereSeparator: { $0.isWhitespace }).first
+        return first.map(String.init) == String(pid)
+    }
+
+    /// 只判断 pidfile 指向的进程是否还在（不校验命令行、不要求就绪），供等待循环使用。
+    private func vpnProcessPresent() -> Bool {
+        guard let pid = currentVPNPID() else { return false }
+        return vpnProcessExists(pid)
+    }
+
+    /// 就绪校验：进程存在 + 就绪标记匹配。只读文件和系统调用，可在后台线程调用。
+    private func vpnReadyVerified() -> Bool {
         guard let pid = currentVPNPID(), vpnProcessExists(pid) else { return false }
-        let (code, out) = run("/bin/ps", ["-ww", "-p", "\(pid)", "-o", "command="])
-        return code == 0 && out.contains(vpnDir + "/zc-tun.sh")
+        return vpnTunnelReady(pid)
     }
 
     /// zju-connect panic 时可能把系统 DNS 留在 2.0.1.x（隧道已死、不可达）。
@@ -743,6 +776,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         startConnect(sel)
     }
 
+    /// 启动时的自动连接：只在「本机只有一个配置、凭据已在钥匙串、组件已安装、
+    /// 当前没有活动隧道」时执行。缺凭据/未安装组件时静默跳过，避免登录时弹窗。
+    private func autoConnectIfNeeded() {
+        guard !busy, !quitting else { return }
+        reloadProfiles(force: true)
+        guard profiles.count == 1 else { return }
+        let sel = profiles[0]
+        guard !vpnProcessAlive() else { return }
+        guard FileManager.default.fileExists(atPath: sudoersPath) else {
+            logLine("auto-connect skipped: sudoers not installed")
+            return
+        }
+        guard loadCredential(for: sel.id) != nil else {
+            logLine("auto-connect skipped: no credential for \(sel.id)")
+            return
+        }
+        logLine("auto-connect: \(sel.profile.name)")
+        startConnect(sel)
+    }
+
     private func startConnect(_ sel: (id: String, profile: Profile)) {
         // 凭据只在钥匙串里；没有就先让用户录入
         guard let cred = loadCredential(for: sel.id) else {
@@ -807,7 +860,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func disconnect() {
-        guard !busy else { return }
+        if waitingReady {
+            // 取消「等待就绪」：后台循环会因进程消失而退出，别再弹失败提示
+            cancelWait = true
+            waitingReady = false
+        } else if busy {
+            return
+        }
         beginBusy("VPN：断开中…")
 
         DispatchQueue.global().async {
@@ -832,12 +891,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func waitForConnected() {
+        waitingReady = true
+        cancelWait = false
         DispatchQueue.global().async {
-            for _ in 0..<40 {
+            var sawProcess = false
+            var processDied = false
+            // utun 就绪通常几秒；90 秒覆盖 DNS 等待和多个域名的重试上限
+            for i in 0..<90 {
                 sleep(1)
-                if self.vpnProcessVerified() { break }
+                if self.vpnReadyVerified() { break }
+                if self.vpnProcessPresent() {
+                    sawProcess = true
+                } else if sawProcess || i >= 5 {
+                    processDied = true  // 启动后很快退出，或 5 秒内根本没起来
+                    break
+                }
             }
-            DispatchQueue.main.async { self.finishBusy() }
+            DispatchQueue.main.async {
+                self.waitingReady = false
+                guard !self.quitting else { return }  // 退出流程自己会终止 App
+                self.finishBusy()
+                // 只有「进程中途退出」才算失败；仍在启动（超时未就绪）继续显示“连接中…”，
+                // 用户可以断开取消。手动断开时不报失败。
+                if processDied && !self.cancelWait {
+                    self.alert("连接没有成功",
+                               "zju-connect 在隧道就绪前退出了。请打开日志查看原因。")
+                }
+                self.cancelWait = false
+            }
         }
     }
 
@@ -1073,6 +1154,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.terminate(nil)
     }
 
+    /// 退出前先断开隧道。用 `.terminateLater` 让系统等待异步清理完成：
+    /// 菜单退出、⌘Q、AppleScript quit、注销/关机都会经过这里。
+    /// zc-vpn-off 要等包装脚本收尾（通常不到 1 秒，极端情况 10 秒后才 SIGKILL），
+    /// 所以放到后台执行，期间菜单显示“断开中…”。
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // 没有隧道时直接退出；busy 时可能连接命令还在飞，交给 zc-vpn-off 兜底
+        guard busy || vpnProcessPresent() else { return .terminateNow }
+        guard !quitting else { return .terminateLater }
+        quitting = true
+        beginBusy("VPN：断开中…")
+        DispatchQueue.global().async {
+            let (code, out) = run("/usr/bin/sudo", ["-n", self.offPath])
+            DispatchQueue.main.async {
+                if code != 0 {
+                    self.logLine("quit: zc-vpn-off failed (\(code)): \(out)")
+                }
+                NSApp.reply(toApplicationShouldTerminate: true)
+            }
+        }
+        return .terminateLater
+    }
+
     private func alert(_ title: String, _ text: String) {
         let a = NSAlert()
         a.messageText = title
@@ -1155,6 +1258,33 @@ if cliArgs.contains("--vpn-on") {
                                    connectionPayload(sel.profile, cred))
     print(out, terminator: "")
     exit(code)
+}
+
+// MARK: - 单实例
+
+/// 同一用户只允许一个 GUI 实例。用 flock 持有实例锁：进程退出或崩溃时内核自动释放，
+/// 不会留下需要手工清理的陈旧锁。返回 false 表示已有实例在跑。
+func acquireInstanceLock() -> Bool {
+    let dir = ProfileStore.dir.deletingLastPathComponent()
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let path = dir.appendingPathComponent("instance.lock").path
+    let fd = open(path, O_CREAT | O_RDWR, 0o644)
+    guard fd >= 0 else { return true }  // 锁文件不可写时不要因此拒绝启动
+    guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
+        close(fd)
+        return false
+    }
+    // 故意不关闭 fd：锁要一直持有到进程退出。顺便写入 pid 便于排障。
+    ftruncate(fd, 0)
+    let pidLine = "\(getpid())\n"
+    _ = pidLine.withCString { write(fd, $0, strlen($0)) }
+    return true
+}
+
+// 已有实例时第二个进程直接退出：不碰 VPN，也不创建第二个菜单栏图标。
+// 这里不能用 NSApp.terminate —— 那会走退出流程，把主实例正在用的隧道断掉。
+if !acquireInstanceLock() {
+    exit(0)
 }
 
 let app = NSApplication.shared

@@ -26,8 +26,13 @@ macOS 菜单栏 VPN 开关 · 用 zju-connect 替代 EasyConnect 客户端
 ## 特性
 
 - **菜单栏一键开关**：连接 / 断开 / 切换配置都在菜单里完成，不用切窗口。
+- **启动即连、退出即断**：本机只有一个配置时，打开 App（包括登录自启）会自动连接；
+  退出时先断开隧道再退出。
 - **开箱即用**：zju-connect、TUN 脚本、sudoers 安装逻辑全部打包进 `VPNMenu.app`。
-- **凭据不落盘**：账号密码存登录钥匙串，通过 stdin 交给 root 脚本，不出现明文文件、不进 `ps`。
+- **单实例**：重复启动（登录自启与手动打开撞在一起、直接运行二进制）时，后一个进程
+  直接退出，不会出现多个菜单栏图标，也不会动已有隧道。
+- **凭据不落盘**：账号密码存登录钥匙串，通过 stdin 交给 root 脚本；密码不落盘、不进 `ps`
+  （用户名会作为 zju-connect 的 `-username` 参数出现在进程列表里）。
 - **多配置**：导入 / 导出 JSON，已连接时切换会自动重连。
 - **崩溃兜底**：zju-connect 异常退出后自动还原被 `dns-hijack` 改写的系统 DNS。
 - **轻量常驻**：稳态下只做 `kill(0)` 检查，不 fork 子进程；配置变化时才重新解析。
@@ -41,7 +46,7 @@ macOS 菜单栏 VPN 开关 · 用 zju-connect 替代 EasyConnect 客户端
 | 连接操作 | 打开客户端登录 | 手敲一长串参数 | 菜单栏点一下，⌘C / ⌘D |
 | 状态反馈 | 客户端窗口 | 看日志 | 图标：空心锁 / 实心锁 / 交替动画 |
 | 配置与多环境 | 客户端管理 | 自己记命令 | JSON 配置，多套切换、导入导出 |
-| 凭据 | 客户端保存 | 环境变量或参数 | 登录钥匙串，经 stdin 传递 |
+| 凭据 | 客户端保存 | 环境变量或参数 | 登录钥匙串，经 stdin 传递；密码不进 `ps` |
 | 提权范围 | 整套后台组件 | 自己 `sudo` | sudoers 只放行启停两个脚本 |
 | 崩溃后的 DNS | 厂商负责 | 可能留在 `2.0.1.x` | 按快照还原，App 自动修复 |
 | 安装 / 卸载 | 安装器 | 自行下载二进制 | 拷贝 App / 删除 App |
@@ -80,12 +85,19 @@ root 脚本只从 stdin 读白名单参数，不 `source`/`eval` 用户可写文
 | 状态 | 菜单栏图标 | 说明 |
 |---|---|---|
 | 未连接 | 空心锁 | 点击「连接」启动隧道 |
-| 连接中 / 断开中 | 实心锁与空心锁每 0.7 秒交替 | 等待隧道进程启动 / 退出 |
+| 连接中 / 断开中 | 实心锁与空心锁每 0.7 秒交替 | 等待 utun 与路由就绪 / 等待进程退出；连接中可以点「断开」取消 |
 | 已连接 | 实心锁 | 内网资源可访问 |
 
 App 每 2 秒刷新一次状态：读 `/var/run/zju-connect.pid` 并 `kill(0)` 判断隧道进程是否
 存活，全部在 App 内完成，不启动子进程。命令行校验只在首次见到某个进程实例时做一次；
 之后用 `sysctl` 读取的进程启动时间识别 PID 复用，所以稳态下没有额外 fork。
+
+“已连接”以 `/var/run/zju-connect.ready` 为准：包装脚本要等 utun 就绪、初始 `/32` 路由
+写好后才会写入这个标记。认证失败或 utun 没出现时脚本会快速退出，不会先显示已连接。
+
+如果本机只有一份配置，App 启动约 1 秒后会自动连接；前提是凭据已保存在钥匙串、
+sudoers 组件已安装，且当前没有活动隧道。缺凭据或未安装时静默跳过，不会在登录时弹窗。
+菜单里的「退出并断开 VPN」会先停掉隧道再退出。
 
 配置目录同样按需解析：每 2 秒只 `stat` 目录，只有目录 mtime 变化、首次启动、每 60 秒
 兜底或通过菜单导入/删除时才重新读取并解码 JSON。
@@ -130,7 +142,7 @@ App 内部结构：
 ```
 Contents/Resources/vpn/
   zju-connect            通用二进制（x86_64 + arm64）
-  zc-tun.sh              启动 TUN、等就绪、注入并定时刷新域名 /32 路由
+  zc-tun.sh              启动 TUN、等就绪、注入路由并写就绪标记
   zc-vpn-on / -off       启停入口（sudoers 只放行这两个）
   zc-vpn-status          命令行状态查询（App 已改为进程内检查，脚本保留给排障）
   zc-dns-restore         按快照还原被 dns-hijack 改写的系统 DNS（崩溃兜底）
@@ -207,8 +219,9 @@ VPNMenu 只是一个菜单栏外壳，真正的 EasyConnect 协议实现来自
 `com.lcssos.vpnmenu.credential.<配置 uuid>`：
 
 - 首次连接某配置时如果钥匙串里没有，会弹框录入；之后可用菜单「设置账号…」修改；
-- 连接时 App 从钥匙串取出，通过 **stdin** 传给 root 脚本（不进 argv，不出现在 `ps` 里），
-  脚本再以 `ZJU_CONNECT_PASSWORD` 环境变量交给 zju-connect，进程退出即消失；
+- 连接时 App 从钥匙串取出，通过 **stdin** 传给 root 脚本（App 自身不把凭据放进 argv）；
+  脚本再以 `ZJU_CONNECT_PASSWORD` 环境变量把密码交给 zju-connect，进程退出即消失；
+  用户名则作为 `-username` 参数传入，因此 `ps` 里能看到用户名、看不到密码；
 - 工程和 App 包内没有 `.pw`、用户名或密码；
 - 从旧版本升级时，首次读取会把旧的全局条目 `com.lcssos.vpnmenu.credential`
   自动迁移到当前配置名下并删除旧条目。
@@ -291,8 +304,10 @@ xattr -dr com.apple.quarantine /Applications/VPNMenu.app
 
 - `/etc/sudoers.d/vpnmenu` —— 只允许当前用户免密执行 App 内的 `zc-vpn-on` / `zc-vpn-off`
 - `/var/run/zju-connect.pid` —— 运行时 PID
+- `/var/run/zju-connect.ready` —— 隧道就绪标记（退出时删除）
 - `~/Library/Logs/VPNMenu/zju-connect.log` —— 日志（超过 5MB 时轮转为 `.log.1`）
 - `~/Library/Application Support/VPNMenu/profiles/` —— 本机配置（不进包、不进 git）
+- `~/Library/Application Support/VPNMenu/instance.lock` —— 单实例锁（进程退出自动释放）
 - `~/Library/LaunchAgents/com.lcssos.vpnmenu.plist` —— 登录自启（App 启动时自动维护路径）
 
 ## 已知坑
@@ -305,6 +320,8 @@ xattr -dr com.apple.quarantine /Applications/VPNMenu.app
   提交前仍建议搜一下内网 IP/域名。
 - **手动编辑配置有延迟**：通过菜单导入/删除会立即生效；直接改已有 JSON 文件时，
   App 最多 60 秒后才会重新读取。
+- **退出要等隧道收尾**：菜单退出会先执行 `zc-vpn-off`，通常不到 1 秒，个别情况下要等
+  zju-connect 关闭连接（约 10 秒）。强制结束进程（`kill -9`、崩溃）不会断开隧道。
 
 ## 许可证
 

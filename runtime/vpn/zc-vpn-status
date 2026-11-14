@@ -3,15 +3,27 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # 状态查询（普通用户即可运行）
 PIDFILE=/var/run/zju-connect.pid
+READYFILE=/var/run/zju-connect.ready
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # 注意：普通用户对 root 进程执行 kill -0 会返回 EPERM，必须用 ps 判断。
 # pidfile 里是 zc-tun.sh 包装脚本的 pid（它负责看护 zju-connect），
 # 同时校验命令行，避免残留 pidfile 指向被系统复用的其它进程。
-if [[ -f "$PIDFILE" ]] && ps -p "$(cat "$PIDFILE")" -o command= 2>/dev/null \
+PID=""
+[[ -f "$PIDFILE" ]] && PID="$(cat "$PIDFILE" 2>/dev/null)"
+if [[ -n "$PID" ]] && ps -ww -p "$PID" -o command= 2>/dev/null \
      | grep -qF "$DIR/zc-tun.sh"; then
-  echo "connected"
-  exit 0
+  # 包装脚本活着还不够：utun 就绪、初始路由写好后才算 connected
+  READY_PID=""
+  if [[ -f "$READYFILE" ]]; then
+    read -r READY_PID _ < "$READYFILE" 2>/dev/null || true
+  fi
+  if [[ "$READY_PID" == "$PID" ]]; then
+    echo "connected"
+    exit 0
+  fi
+  echo "connecting"
+  exit 2
 fi
 
 echo "disconnected"
