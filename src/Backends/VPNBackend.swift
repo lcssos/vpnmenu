@@ -40,8 +40,7 @@ protocol VPNBackend: AnyObject {
 }
 
 enum BackendRegistry {
-    /// Task 4 注册 ZjuConnectBackend 后替换为 [ZjuConnectBackend.shared]。
-    static var all: [VPNBackend] = []
+    static var all: [VPNBackend] = [ZjuConnectBackend.shared]
 
     static func backend(id: String, in list: [VPNBackend] = all) -> VPNBackend? {
         list.first { $0.id == id }

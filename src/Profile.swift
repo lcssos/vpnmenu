@@ -114,7 +114,7 @@ enum ProfileStore {
             let url = dir.appendingPathComponent(n)
             guard let data = try? Data(contentsOf: url),
                   let p = try? JSONDecoder().decode(Profile.self, from: data),
-                  ProfileValidation.error(for: p) == nil else { continue }
+                  BackendRegistry.validate(p) == nil else { continue }
             out.append(((n as NSString).deletingPathExtension, p))
         }
         return out.sorted { $0.profile.name.localizedStandardCompare($1.profile.name) == .orderedAscending }
@@ -132,7 +132,7 @@ enum ProfileStore {
         guard let p = try? JSONDecoder().decode(Profile.self, from: data) else {
             return (nil, "不是有效的配置 JSON")
         }
-        if let err = ProfileValidation.error(for: p) { return (nil, err) }
+        if let err = BackendRegistry.validate(p) { return (nil, err) }
         if let id = save(p) { return (id, nil) }
         return (nil, "无法写入配置目录")
     }

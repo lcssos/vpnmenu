@@ -39,4 +39,46 @@ func runBackendTests() {
     checkEqual(b.repairCalls, 1, "遍历所有后端")
     BackendRegistry.repairStaleStatesIfIdle(busy: true, in: [a, b])
     checkEqual(a.repairCalls, 1, "busy 时不修复")
+
+    runZjuBackendTests()
+}
+
+func runZjuBackendTests() {
+    let dir = NSTemporaryDirectory() + "vpnmenu-tests-\(UUID().uuidString)"
+    try! FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: dir) }
+
+    let pidFile = dir + "/pid", readyFile = dir + "/ready"
+    let me = getpid()
+    try! "\(me)\n".write(toFile: pidFile, atomically: true, encoding: .utf8)
+    try! "\(me) 99999\n".write(toFile: readyFile, atomically: true, encoding: .utf8)
+
+    let probe = ProcessFileProbe(config: .init(
+        pidFile: pidFile, readyFile: readyFile,
+        commandMarker: CommandLine.arguments[0]))
+    checkEqual(probe.alivePID(), me, "探针识别存活进程")
+    check(probe.tunnelReady(me), "探针识别就绪标记")
+    checkEqual(probe.alivePID(), me, "缓存命中仍返回 PID")
+
+    let zju = ZjuConnectBackend.shared
+    checkEqual(zju.id, "zju-connect", "后端 id")
+    check(zju.connectScript.hasSuffix("/zc-vpn-on"), "连接脚本路径")
+    check(zju.disconnectScript.hasSuffix("/zc-vpn-off"), "断开脚本路径")
+    check(zju.logFile.hasSuffix("/Library/Logs/VPNMenu/zju-connect.log"), "日志路径")
+
+    var p = makeProfile(name: "n", server: "vpn.example.com")
+    p.tunInterface = "en0"
+    checkEqual(zju.validate(p), "隧道接口名不合法：en0", "zju 校验 tun")
+
+    p.tunInterface = "utun9"; p.socksBind = "127.0.0.1:2090"
+    p.httpBind = "127.0.0.1:2091"; p.domains = ["a.example.com"]
+    p.proxyDomains = ["b.example.com"]
+    let expected = [
+        "ACCOUNT=user", "PASSWORD=pass", "SERVER=vpn.example.com", "PORT=4430",
+        "TUN_IF=utun9", "SOCKS_BIND=127.0.0.1:2090", "HTTP_BIND=127.0.0.1:2091",
+        "DOMAIN=a.example.com", "PROXY_DOMAIN=b.example.com",
+    ].joined(separator: "\n") + "\n"
+    checkEqual(zju.payload(p, ("user", "pass")), expected, "连接参数 payload 不变")
+
+    check(BackendRegistry.all.contains { $0.id == "zju-connect" }, "注册表包含 zju")
 }
