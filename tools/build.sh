@@ -11,7 +11,7 @@
 # 产物：
 #   package/VPNMenu.app               可直接分发/安装的 App
 #   dist/VPNMenu-<版本>.zip           加 --dist 时的压缩包
-#   dist/VPNMenu-<版本>.dmg           加 --dist 时的磁盘映像（拖入 /Applications）
+#   dist/VPNMenu-<版本>.dmg           加 --dist 时的磁盘映像（App + 安装脚本）
 #   dist/SHA256SUMS                   加 --dist 时的产物校验和
 #
 # 用法：
@@ -138,6 +138,9 @@ if [[ "$DO_DIST" == "yes" ]]; then
   trap 'rm -rf "$DMG_STAGE"' EXIT
   ditto "$PKG" "$DMG_STAGE/VPNMenu.app"
   ln -s /Applications "$DMG_STAGE/Applications"
+  # App 安装后归 root:wheel，Finder 无法覆盖旧版本；提供提权安装脚本
+  cp "$ROOT/tools/dmg-install.command" "$DMG_STAGE/安装 VPNMenu.command"
+  chmod 755 "$DMG_STAGE/安装 VPNMenu.command"
   rm -f "$DMG"
   hdiutil create -volname "VPNMenu" -srcfolder "$DMG_STAGE" \
     -ov -format UDZO -quiet "$DMG"

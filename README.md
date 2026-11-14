@@ -292,12 +292,23 @@ tools/deploy.sh --build    # 先构建再部署
 
 产物在 `dist/`：
 
-- `VPNMenu-<版本>.dmg` —— 发布用磁盘映像，打开后把 `VPNMenu.app` 拖进 `Applications`；
+- `VPNMenu-<版本>.dmg` —— 发布用磁盘映像，内含 App、`Applications` 快捷方式和
+  `安装 VPNMenu.command`；
 - `VPNMenu-<版本>.zip` —— 压缩包，解压后拖到 `/Applications`；
 - `SHA256SUMS` —— 两个产物的 SHA-256，发布时一起上传。
 
-DMG 里除 App 外还有指向 `/Applications` 的快捷方式，支持直接拖放安装。发布到 GitHub
-Releases 时把 dmg 和 `SHA256SUMS` 作为附件即可，source 归档由 tag 自动提供。
+首次安装可以把 `VPNMenu.app` 拖进「应用程序」，也可以双击 `安装 VPNMenu.command`
+（若双击被 Gatekeeper 拦下，右键 →「打开」）。
+**升级时请用安装脚本**：已安装的 App 归 `root:wheel` 所有（sudoers 安全边界），
+Finder 以普通用户身份无法覆盖，直接拖动会报「必须跳过某些项目」。安装脚本会退出旧实例、
+用管理员权限替换并重跑 `install.sh`。手动升级等价于：
+
+```bash
+sudo rm -rf /Applications/VPNMenu.app
+# 再从 DMG 拖入（或 sudo ditto ...）
+```
+
+发布到 GitHub Releases 时把 dmg 和 `SHA256SUMS` 作为附件即可，source 归档由 tag 自动提供。
 
 另一台 Mac：打开 DMG → 拖到「应用程序」→ 打开 → 导入配置 → 录入账号 →
 首次连接时输入管理员密码。如提示「无法验证开发者」（下载带 quarantine）：
@@ -330,6 +341,9 @@ xattr -dr com.apple.quarantine /Applications/VPNMenu.app
   App 最多 60 秒后才会重新读取。
 - **退出要等隧道收尾**：菜单退出会先执行 `zc-vpn-off`，通常不到 1 秒，个别情况下要等
   zju-connect 关闭连接（约 10 秒）。强制结束进程（`kill -9`、崩溃）不会断开隧道。
+- **DMG 覆盖安装需要管理员权限**：安装后 App 归 `root:wheel`，Finder 直接拖入覆盖会
+  报「必须跳过某些项目」。请运行 DMG 里的「安装 VPNMenu.command」，或先
+  `sudo rm -rf /Applications/VPNMenu.app` 再拖入。
 
 ## 许可证
 
