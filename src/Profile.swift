@@ -5,10 +5,17 @@ import Foundation
 
 // MARK: - 本机配置（不进仓库、也不进 App 包）
 
+/// 后端标识。新增后端时在 BackendRegistry 注册同名 id。
+enum BackendID {
+    static let zjuConnect = "zju-connect"
+}
+
 /// 连接参数只保存在本机：~/Library/Application Support/VPNMenu/profiles/<uuid>.json
 /// 账号密码不在这里，见 Keychain.swift。
 struct Profile: Codable {
     var schema: Int?
+    /// 缺省（旧配置）视为 zju-connect；导出时不写 null。
+    var backend: String?
     var name: String
     var server: String
     var port: Int?
@@ -18,9 +25,29 @@ struct Profile: Codable {
     var domains: [String]?
     var proxyDomains: [String]?
 
+    var backendID: String { backend ?? BackendID.zjuConnect }
     var portValue: Int { port ?? 4430 }
     var domainList: [String] { domains ?? [] }
     var proxyDomainList: [String] { proxyDomains ?? [] }
+
+    private enum CodingKeys: String, CodingKey {
+        case schema, backend, name, server, port
+        case tunInterface, socksBind, httpBind, domains, proxyDomains
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(schema, forKey: .schema)
+        try c.encodeIfPresent(backend, forKey: .backend)
+        try c.encode(name, forKey: .name)
+        try c.encode(server, forKey: .server)
+        try c.encodeIfPresent(port, forKey: .port)
+        try c.encodeIfPresent(tunInterface, forKey: .tunInterface)
+        try c.encodeIfPresent(socksBind, forKey: .socksBind)
+        try c.encodeIfPresent(httpBind, forKey: .httpBind)
+        try c.encodeIfPresent(domains, forKey: .domains)
+        try c.encodeIfPresent(proxyDomains, forKey: .proxyDomains)
+    }
 }
 
 enum ProfileValidation {
@@ -36,14 +63,19 @@ enum ProfileValidation {
         matches(s, #"^[A-Za-z0-9.]+:[0-9]{1,5}$"#)
     }
 
-    /// 返回 nil 表示合法
-    static func error(for p: Profile) -> String? {
+    /// 与后端无关的通用校验。返回 nil 表示合法。
+    static func commonError(for p: Profile) -> String? {
         let name = p.name.trimmingCharacters(in: .whitespacesAndNewlines)
         if name.isEmpty { return "配置名称不能为空" }
         if name.count > 80 { return "配置名称过长" }
         if !isHost(p.server) { return "服务器地址不合法：\(p.server)" }
         let port = p.portValue
         if port < 1 || port > 65535 { return "端口不合法：\(port)" }
+        return nil
+    }
+
+    /// zju-connect 特有的字段校验。返回 nil 表示合法。
+    static func zjuError(for p: Profile) -> String? {
         if let v = p.tunInterface, !v.isEmpty, !matches(v, #"^utun[0-9]{1,3}$"#) {
             return "隧道接口名不合法：\(v)"
         }
@@ -55,6 +87,11 @@ enum ProfileValidation {
             return "域名不合法：\(d)"
         }
         return nil
+    }
+
+    /// 完整校验（过渡期保留；接入注册表后由 BackendRegistry.validate 统一调用）。
+    static func error(for p: Profile) -> String? {
+        commonError(for: p) ?? zjuError(for: p)
     }
 }
 
