@@ -131,7 +131,9 @@ build/                  中间产物（两个架构的 App 二进制、make-icon
 assets/                 图标产物（icon-1024.png、VPNMenu.iconset、VPNMenu.icns）
 vendor/                 zju-connect 的 amd64/arm64 原件，用于合成通用二进制
 package/VPNMenu.app     组装好的 App（部署/分发的来源）
-dist/VPNMenu.zip        给另一台电脑用的压缩包
+dist/VPNMenu-<版本>.dmg 发布用磁盘映像（打开后拖进 /Applications）
+dist/VPNMenu-<版本>.zip 压缩包，解压后拖进 /Applications
+dist/SHA256SUMS         两个产物的 SHA-256
 ```
 
 已安装的 `/Applications/VPNMenu.app` 是**部署产物**，不是原件：改东西请改 `src/` 和
@@ -255,7 +257,7 @@ $APP --vpn-on
 
 ```bash
 ~/opt/vpnmenu/tools/build.sh           # 只组装 package/VPNMenu.app
-~/opt/vpnmenu/tools/build.sh --dist    # 同时打包 dist/VPNMenu.zip
+~/opt/vpnmenu/tools/build.sh --dist    # 同时打包 dist/VPNMenu-<版本>.zip 和 .dmg
 ```
 
 脚本会分别交叉编译 x86_64 与 arm64，再用 `lipo` 合成通用二进制，并重新签名。
@@ -288,11 +290,17 @@ tools/deploy.sh --build    # 先构建再部署
 ~/opt/vpnmenu/tools/build.sh --dist
 ```
 
-等价于构建后手动执行
-`ditto -c -k --sequesterRsrc --keepParent package/VPNMenu.app dist/VPNMenu.zip`。
+产物在 `dist/`：
 
-另一台 Mac：解压 → 拖到 `/Applications` → 打开 → 导入配置 → 录入账号 →
-首次连接时输入管理员密码。如提示「无法验证开发者」（AirDrop/下载带 quarantine）：
+- `VPNMenu-<版本>.dmg` —— 发布用磁盘映像，打开后把 `VPNMenu.app` 拖进 `Applications`；
+- `VPNMenu-<版本>.zip` —— 压缩包，解压后拖到 `/Applications`；
+- `SHA256SUMS` —— 两个产物的 SHA-256，发布时一起上传。
+
+DMG 里除 App 外还有指向 `/Applications` 的快捷方式，支持直接拖放安装。发布到 GitHub
+Releases 时把 dmg 和 `SHA256SUMS` 作为附件即可，source 归档由 tag 自动提供。
+
+另一台 Mac：打开 DMG → 拖到「应用程序」→ 打开 → 导入配置 → 录入账号 →
+首次连接时输入管理员密码。如提示「无法验证开发者」（下载带 quarantine）：
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/VPNMenu.app

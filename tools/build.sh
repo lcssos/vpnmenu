@@ -10,11 +10,13 @@
 #   assets/                           图标产物（缺失时会自动生成）
 # 产物：
 #   package/VPNMenu.app               可直接分发/安装的 App
-#   dist/VPNMenu.zip                  加 --dist 时额外打包的分发压缩包
+#   dist/VPNMenu-<版本>.zip           加 --dist 时的压缩包
+#   dist/VPNMenu-<版本>.dmg           加 --dist 时的磁盘映像（拖入 /Applications）
+#   dist/SHA256SUMS                   加 --dist 时的产物校验和
 #
 # 用法：
 #   tools/build.sh          只组装 App
-#   tools/build.sh --dist   组装 App 并打包 dist/VPNMenu.zip
+#   tools/build.sh --dist   组装 App 并打包 zip + dmg
 set -euo pipefail
 
 DO_DIST=no
@@ -115,15 +117,33 @@ echo "== 架构"
 lipo -archs "$PKG/Contents/MacOS/VPNMenu"
 lipo -archs "$PKG/Contents/Resources/vpn/zju-connect"
 
-# ---------- 分发压缩包 ----------
+# ---------- 分发产物 ----------
 if [[ "$DO_DIST" == "yes" ]]; then
   DIST="$ROOT/dist"
-  ZIP="$DIST/VPNMenu.zip"
-  echo "== 打包 $ZIP"
+  VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
+    "$ROOT/src/Info.plist" 2>/dev/null || true)"
+  [[ -z "$VERSION" ]] && VERSION="dev"
+  ZIP="$DIST/VPNMenu-$VERSION.zip"
+  DMG="$DIST/VPNMenu-$VERSION.dmg"
   mkdir -p "$DIST"
+  rm -f "$DIST/VPNMenu.zip" "$DIST/VPNMenu.dmg"   # 清理旧版不带版本号的文件
+
+  echo "== 打包 $ZIP"
   rm -f "$ZIP"
   ditto -c -k --sequesterRsrc --keepParent "$PKG" "$ZIP"
-  ls -lh "$ZIP"
+
+  # DMG：里面是 App + 指向 /Applications 的软链接，打开后直接拖进去即可
+  echo "== 制作 $DMG"
+  DMG_STAGE="$(mktemp -d "${TMPDIR:-/tmp}/vpnmenu-dmg.XXXXXX")"
+  trap 'rm -rf "$DMG_STAGE"' EXIT
+  ditto "$PKG" "$DMG_STAGE/VPNMenu.app"
+  ln -s /Applications "$DMG_STAGE/Applications"
+  rm -f "$DMG"
+  hdiutil create -volname "VPNMenu" -srcfolder "$DMG_STAGE" \
+    -ov -format UDZO -quiet "$DMG"
+
+  ( cd "$DIST" && shasum -a 256 "$(basename "$ZIP")" "$(basename "$DMG")" > SHA256SUMS )
+  ls -lh "$ZIP" "$DMG" "$DIST/SHA256SUMS"
 fi
 
 echo "== 完成: $PKG"
