@@ -129,7 +129,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !processAlive {
             BackendRegistry.repairStaleStatesIfIdle(busy: busy)
         }
-        if !processAlive && !busy && !waitingReady { tunnelBackend = nil }
+        if !processAlive && !BackendRegistry.anyActiveProcess() && !busy && !waitingReady {
+            tunnelBackend = nil
+        }
         connectItem.isEnabled = !processAlive && !busy
         // 启动等待期间也允许断开：隧道迟迟不就绪时用户要能取消
         disconnectItem.isEnabled = processAlive && (!busy || waitingReady)
@@ -160,9 +162,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return BackendRegistry.backend(for: hit.profile)
     }
 
-    /// 当前实际要操作的后端：存活隧道 > 连接在飞 > 选中配置 > 第一个注册后端。
+    /// 当前实际要操作的后端：运行中的隧道 > 连接在飞 > 选中配置 > 第一个注册后端。
+    /// 这里用 processPresent 而不是带 ps 校验的 alivePID：断开/退出宁可多停一次，
+    /// 也不能因为命令行校验失败而把操作打到另一个后端上。
     func currentTunnelBackend() -> VPNBackend {
-        BackendRegistry.resolve(alive: BackendRegistry.live()?.backend,
+        BackendRegistry.resolve(alive: BackendRegistry.running(),
                                 pending: tunnelBackend,
                                 selected: selectedBackend(),
                                 registered: BackendRegistry.all)!

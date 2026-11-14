@@ -63,6 +63,12 @@ enum BackendRegistry {
         list.contains { $0.processPresent() }
     }
 
+    /// 实际在跑的隧道（只看进程是否存在，不做命令行校验）；任意线程调用。
+    /// 用于决定断开/退出目标：宁可多停一次，也不要停错后端。
+    static func running(in list: [VPNBackend] = all) -> VPNBackend? {
+        list.first { $0.processPresent() }
+    }
+
     /// 纯选择逻辑：存活 > 连接在飞 > 选中配置 > 第一个注册后端。
     static func resolve(alive: VPNBackend?, pending: VPNBackend?,
                         selected: VPNBackend?, registered: [VPNBackend]) -> VPNBackend? {

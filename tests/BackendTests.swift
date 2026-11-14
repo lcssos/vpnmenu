@@ -33,6 +33,15 @@ func runBackendTests() {
     var p = makeProfile(name: "x", server: "vpn.example.com"); p.backend = "nope"
     checkEqual(BackendRegistry.validate(p, in: [a]), "不支持的 VPN 类型：nope", "未知后端报错")
 
+    a.present = true; b.present = false
+    check(BackendRegistry.running(in: [b, a]) === a, "以 processPresent 识别运行中的后端")
+
+    let legacyProfile = makeProfile(name: "old", server: "vpn.example.com")
+    checkEqual(BackendRegistry.validate(legacyProfile), nil, "旧配置通过注册表校验")
+    checkEqual(BackendRegistry.backend(for: legacyProfile)?.id, "zju-connect",
+               "旧配置解析到 zju 后端")
+
+    a.present = false
     a.statusResult = BackendStatus(pid: nil, alive: false, ready: false)
     BackendRegistry.repairStaleStatesIfIdle(busy: false, in: [a, b])
     checkEqual(a.repairCalls, 1, "无存活且空闲时修复")
