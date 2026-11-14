@@ -7,7 +7,7 @@ App 内所有运行组件都在这个目录，安装后会被 chown 成 root:whe
 | `zju-connect` | 通用二进制（x86_64 + arm64），替代 EasyConnect 客户端 |
 | `zc-tun.sh` | 启动 TUN、等隧道就绪、注入域名 /32 路由（root） |
 | `zc-vpn-on` / `zc-vpn-off` | 启停入口，sudoers 只放行这两个 |
-| `zc-vpn-status` | 状态查询（普通用户可跑）；发现残留 VPN DNS 时额外输出 `dns=stale` |
+| `zc-vpn-status` | 命令行状态查询（普通用户可跑）；App 现在进程内检查状态，脚本保留给排障 |
 | `zc-dns-restore` | 按启动前快照还原被 `-dns-hijack` 改写的系统 DNS（root，崩溃兜底） |
 | `install.sh` | 一次性安装：权限、sudoers、清理旧版组件 |
 | `uninstall.sh` | 撤销 sudoers 规则并停止 VPN |
@@ -46,7 +46,7 @@ App 解析配置后，把参数以 `key=value` 形式通过 **stdin** 交给 `zc
 
 1. `zc-tun.sh` 的 EXIT 清理（每 5 秒检查子进程，panic 后最多 5 秒触发）；
 2. `zc-vpn-off`（覆盖 `kill -9` / 手动清理）；
-3. App 轮询到 `zc-vpn-status` 输出 `dns=stale` 时自动调用 `zc-vpn-off`。
+3. App 断开状态下读取 `/etc/resolv.conf`，发现仍是 `2.0.1.x` 时自动调用 `zc-vpn-off`。
 
 ## 安装时发生了什么
 

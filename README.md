@@ -30,6 +30,7 @@ macOS 菜单栏 VPN 开关 · 用 zju-connect 替代 EasyConnect 客户端
 - **凭据不落盘**：账号密码存登录钥匙串，通过 stdin 交给 root 脚本，不出现明文文件、不进 `ps`。
 - **多配置**：导入 / 导出 JSON，已连接时切换会自动重连。
 - **崩溃兜底**：zju-connect 异常退出后自动还原被 `dns-hijack` 改写的系统 DNS。
+- **轻量常驻**：稳态下只做 `kill(0)` 检查，不 fork 子进程；配置变化时才重新解析。
 - **通用二进制**：同一份 App 在 Intel 与 Apple Silicon 上原生运行，无需 Rosetta。
 
 ## 为什么选择 VPNMenu
@@ -82,8 +83,15 @@ root 脚本只从 stdin 读白名单参数，不 `source`/`eval` 用户可写文
 | 连接中 / 断开中 | 实心锁与空心锁每 0.7 秒交替 | 等待隧道进程启动 / 退出 |
 | 已连接 | 实心锁 | 内网资源可访问 |
 
-App 每 2 秒检查一次隧道进程（`/var/run/zju-connect.pid` + 命令行校验）；发现系统 DNS
-仍指向 VPN 地址（`2.0.1.x`）时，自动调用 `zc-vpn-off` 按启动前快照还原。
+App 每 2 秒刷新一次状态：读 `/var/run/zju-connect.pid` 并 `kill(0)` 判断隧道进程是否
+存活，全部在 App 内完成，不启动子进程。命令行校验只在首次见到某个进程实例时做一次；
+之后用 `sysctl` 读取的进程启动时间识别 PID 复用，所以稳态下没有额外 fork。
+
+配置目录同样按需解析：每 2 秒只 `stat` 目录，只有目录 mtime 变化、首次启动、每 60 秒
+兜底或通过菜单导入/删除时才重新读取并解码 JSON。
+
+断开状态下发现系统 DNS 仍指向 VPN 地址（`2.0.1.x`）时，自动调用 `zc-vpn-off`
+按启动前快照还原。断开时 `zc-tun.sh` 的等待会被立即打断，不用再等满 5 秒。
 
 ## 目录
 
@@ -122,9 +130,9 @@ App 内部结构：
 ```
 Contents/Resources/vpn/
   zju-connect            通用二进制（x86_64 + arm64）
-  zc-tun.sh              启动 TUN、等就绪、注入域名 /32 路由
+  zc-tun.sh              启动 TUN、等就绪、注入并定时刷新域名 /32 路由
   zc-vpn-on / -off       启停入口（sudoers 只放行这两个）
-  zc-vpn-status          状态查询（残留 VPN DNS 时输出 dns=stale）
+  zc-vpn-status          命令行状态查询（App 已改为进程内检查，脚本保留给排障）
   zc-dns-restore         按快照还原被 dns-hijack 改写的系统 DNS（崩溃兜底）
   install.sh             一次性安装：chown root、写 sudoers、清理旧组件
   uninstall.sh           撤销
@@ -283,7 +291,7 @@ xattr -dr com.apple.quarantine /Applications/VPNMenu.app
 
 - `/etc/sudoers.d/vpnmenu` —— 只允许当前用户免密执行 App 内的 `zc-vpn-on` / `zc-vpn-off`
 - `/var/run/zju-connect.pid` —— 运行时 PID
-- `~/Library/Logs/VPNMenu/zju-connect.log` —— 日志
+- `~/Library/Logs/VPNMenu/zju-connect.log` —— 日志（超过 5MB 时轮转为 `.log.1`）
 - `~/Library/Application Support/VPNMenu/profiles/` —— 本机配置（不进包、不进 git）
 - `~/Library/LaunchAgents/com.lcssos.vpnmenu.plist` —— 登录自启（App 启动时自动维护路径）
 
@@ -295,6 +303,8 @@ xattr -dr com.apple.quarantine /Applications/VPNMenu.app
 - **路径不能含空格**：sudoers 的路径匹配不支持空格，`install.sh` 会直接报错。
 - **配置目录不要提交**：`.gitignore` 已加 `profiles/` 与 `*.vpnprofile.json` 兜底，
   提交前仍建议搜一下内网 IP/域名。
+- **手动编辑配置有延迟**：通过菜单导入/删除会立即生效；直接改已有 JSON 文件时，
+  App 最多 60 秒后才会重新读取。
 
 ## 许可证
 
