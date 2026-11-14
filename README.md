@@ -1,10 +1,71 @@
+<div align="center">
+
+<img src="./docs/images/icon.png" width="128" alt="VPNMenu 图标">
+
 # VPNMenu
 
-菜单栏 VPN 开关，用 zju-connect 替代 EasyConnect 客户端。**所有运行组件都在 App 内部**，
-拷贝到另一台 Mac 的 `/Applications` 后，首次连接输一次管理员密码即可使用。
+macOS 菜单栏 VPN 开关 · 用 zju-connect 替代 EasyConnect 客户端
+
+[![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
+[![macOS](https://img.shields.io/badge/macOS-11%2B-lightgrey.svg)](#构建)
+[![Architecture](https://img.shields.io/badge/arch-x86__64%20%7C%20arm64-lightgrey.svg)](#构建)
+[![Swift](https://img.shields.io/badge/Swift-5-F05138.svg)](src/main.swift)
+[![zju-connect](https://img.shields.io/badge/zju--connect-v1.3.1-7c3aed.svg)](https://github.com/Mythologyli/zju-connect)
+[![Last commit](https://img.shields.io/github/last-commit/lcssos/vpnmenu.svg)](https://github.com/lcssos/vpnmenu)
+
+<img src="./docs/images/hero.jpg" width="920" alt="VPNMenu 菜单栏菜单">
+
+</div>
+
+菜单栏常驻，点一下就能连接/断开。**所有运行组件都在 App 内部**，拷贝到另一台 Mac 的
+`/Applications` 后，首次连接输一次管理员密码即可使用，不再需要装 EasyConnect 客户端。
 
 **本仓库不含任何公司内网信息**：服务器地址、域名路由、账号密码都不在源码或 App 包里，
 配置保存在使用者本机（见「配置与隐私」）。
+
+## 特性
+
+- **菜单栏一键开关**：连接 / 断开 / 切换配置都在菜单里完成，不用切窗口。
+- **开箱即用**：zju-connect、TUN 脚本、sudoers 安装逻辑全部打包进 `VPNMenu.app`。
+- **凭据不落盘**：账号密码存登录钥匙串，通过 stdin 交给 root 脚本，不出现明文文件、不进 `ps`。
+- **多配置**：导入 / 导出 JSON，已连接时切换会自动重连。
+- **崩溃兜底**：zju-connect 异常退出后自动还原被 `dns-hijack` 改写的系统 DNS。
+- **通用二进制**：同一份 App 在 Intel 与 Apple Silicon 上原生运行，无需 Rosetta。
+
+## 工作原理
+
+```mermaid
+flowchart LR
+    UI["菜单栏 App<br/>配置 JSON · 登录钥匙串"] -->|"stdin 传参"| ON["zc-vpn-on<br/>sudo 唯一入口"]
+    ON --> TUN["zc-tun.sh<br/>等就绪 · 注入 /32 路由"]
+    TUN --> ZC["zju-connect<br/>EasyConnect 协议 · TUN 模式"]
+    ZC --> UTUN["utun4<br/>分流隧道"]
+    UTUN --> LAN["内网资源"]
+    ZC -.->|"dns-hijack"| DNS["内网 DNS<br/>2.0.1.x"]
+    TUN -.->|"退出 / 崩溃"| FIX["zc-dns-restore"]
+    FIX -.->|"按快照还原"| DNS
+
+    classDef user fill:#eef2ff,stroke:#6366f1,color:#312e81
+    classDef root fill:#fff7ed,stroke:#f59e0b,color:#7c2d12
+    classDef net fill:#ecfeff,stroke:#06b6d4,color:#164e63
+    class UI user
+    class ON,TUN,ZC,FIX root
+    class UTUN,DNS,LAN net
+```
+
+紫框 = 普通用户空间（界面与配置），橙框 = root 侧（经 sudo 启动），青框 = 网络侧。
+root 脚本只从 stdin 读白名单参数，不 `source`/`eval` 用户可写文件，sudoers 也不放行 shell。
+
+### 状态与图标
+
+| 状态 | 菜单栏图标 | 说明 |
+|---|---|---|
+| 未连接 | 空心锁 | 点击「连接」启动隧道 |
+| 连接中 / 断开中 | 实心锁与空心锁每 0.7 秒交替 | 等待隧道进程启动 / 退出 |
+| 已连接 | 实心锁 | 内网资源可访问 |
+
+App 每 2 秒检查一次隧道进程（`/var/run/zju-connect.pid` + 命令行校验）；发现系统 DNS
+仍指向 VPN 地址（`2.0.1.x`）时，自动调用 `zc-vpn-off` 按启动前快照还原。
 
 ## 目录
 
@@ -15,6 +76,7 @@ src/main.swift          菜单栏 App 源码（状态、连接/断开、配置�
 src/Info.plist          bundle 元信息（LSUIElement=true，CFBundleIconFile=VPNMenu）
 runtime/vpn/            运行期脚本（zc-*.sh、install.sh、组件说明）
 docs/profile.example.json  配置格式示例（占位值，可直接作为导入模板）
+docs/images/            README 用的图标与示意图
 docs/                   旧方案原理笔记（历史文档）
 tools/build.sh          从源码组装通用 App
 tools/deploy.sh         构建并部署到 /Applications
