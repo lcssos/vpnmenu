@@ -55,11 +55,27 @@ if [[ ! -f /etc/sudoers.d/vpnmenu ]]; then
 fi
 
 echo "== 重启菜单栏进程"
+APP_EXE="$DST/Contents/MacOS/VPNMenu"
+# 现有实例可能不是 launchd 启动的（例如上次由 open -a 拉起），它仍占着单实例锁，
+# kickstart 拉起的新进程会立刻退出，看起来像“重启成功”但实际跑的还是旧二进制。
+# 先让旧实例正常退出（会断开隧道），必要时强制结束，再启动新版本。
+if pgrep -f "$APP_EXE" >/dev/null 2>&1; then
+  pkill -TERM -f "$APP_EXE" 2>/dev/null || true
+  for _ in $(seq 1 60); do
+    pgrep -f "$APP_EXE" >/dev/null 2>&1 || break
+    sleep 0.25
+  done
+  pkill -KILL -f "$APP_EXE" 2>/dev/null || true
+fi
 if launchctl print "gui/$UID_NUM/$LABEL" >/dev/null 2>&1; then
-  launchctl kickstart -k "gui/$UID_NUM/$LABEL"
+  launchctl kickstart -k "gui/$UID_NUM/$LABEL" || open -a "$DST"
 else
   open -a "$DST"
 fi
+for _ in $(seq 1 25); do
+  pgrep -f "$APP_EXE" >/dev/null 2>&1 && break
+  sleep 0.2
+done
 sleep 2
 
 if [[ "$WAS_CONNECTED" == "yes" ]]; then
