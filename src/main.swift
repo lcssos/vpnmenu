@@ -269,6 +269,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var profiles: [(id: String, profile: Profile)] = []
     private var selectedID: String?
     private var profilesSignature = ""
+    // 配置目录的扫描节流：目录 mtime 变化时立即重扫，另外每 60 秒兜底重扫一次
+    // （覆盖直接编辑已有 JSON 的场景——这种情况不会改变目录 mtime）。
+    private var profilesDirMTime: Date?
+    private var profilesScanTime: Date?
 
     // 所有组件都在 App 内部：Contents/Resources/vpn/
     private let vpnDir: String = {
@@ -282,12 +286,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var installPath: String { vpnDir + "/install.sh" }
 
     // 状态检查在进程内完成，不再每 2 秒 fork 一个 zc-vpn-status。
-    // pidfile 里是 root 包装脚本 zc-tun.sh 的 PID；kill(0) 只做存在性检查，
-    // 命令行校验（防 PID 复用）按 PID 变化 / 每 30 秒用一次 ps。
+    // pidfile 里是 root 包装脚本 zc-tun.sh 的 PID；`kill(0)` 做存活检查，
+    // `sysctl` 读启动时间识别 PID 复用，`ps` 只在首次见到某个进程实例时校验一次命令行。
     private let statusPidFile = "/var/run/zju-connect.pid"
-    private var statusCachePID: pid_t = -1
-    private var statusCacheAlive = false
-    private var statusCacheTime = Date.distantPast
+    private var statusVerifiedPID: pid_t = -1
+    private var statusVerifiedStart: UInt64?
+    private var statusVerifiedAlive = false
     private var logPath: String { NSHomeDirectory() + "/Library/Logs/VPNMenu/zju-connect.log" }
     private let sudoersPath = "/etc/sudoers.d/vpnmenu"
 
@@ -370,8 +374,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - 配置菜单
 
-    private func reloadProfiles() {
-        profiles = ProfileStore.list()
+    /// 每 2 秒的刷新会调用这里，但只有「目录 mtime 变了 / 第一次扫描 / 距上次扫描
+    /// 超过 60 秒 / 显式 force」时才真正读盘并解码 JSON，避免每 2 秒全量解析配置。
+    private func reloadProfiles(force: Bool = false) {
+        let now = Date()
+        let attrs = try? FileManager.default.attributesOfItem(atPath: ProfileStore.dir.path)
+        let mtime = attrs?[.modificationDate] as? Date
+        let needsScan = force
+            || profilesScanTime == nil
+            || mtime != profilesDirMTime
+            || now.timeIntervalSince(profilesScanTime ?? now) > 60
+        if needsScan {
+            profiles = ProfileStore.list()
+            profilesDirMTime = mtime
+            profilesScanTime = now
+        }
         let ids = profiles.map { $0.id }
         if let saved = UserDefaults.standard.string(forKey: ProfileStore.selectedKey),
            ids.contains(saved) {
@@ -429,7 +446,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func selectedProfile() -> (id: String, profile: Profile)? {
-        if profiles.isEmpty { reloadProfiles() }
+        if profiles.isEmpty { reloadProfiles(force: true) }
         if let id = selectedID, let hit = profiles.first(where: { $0.id == id }) {
             return hit
         }
@@ -494,7 +511,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             UserDefaults.standard.set(id, forKey: ProfileStore.selectedKey)
         }
-        reloadProfiles()
+        reloadProfiles(force: true)
         refresh()
     }
 
@@ -526,7 +543,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         deleteCredential(service: credentialService(for: sel.id))
         UserDefaults.standard.removeObject(forKey: ProfileStore.selectedKey)
         profilesSignature = ""
-        reloadProfiles()
+        reloadProfiles(force: true)
         refresh()
     }
 
@@ -565,40 +582,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 只做存在性检查（可在后台线程调用）。root 进程对普通用户执行 kill(0) 会返回
     /// EPERM，同样说明进程还活着；ESRCH 才是真的没了。
-    private func vpnProcessExists() -> Bool {
-        guard let pid = currentVPNPID() else { return false }
-        return kill(pid, 0) == 0 || errno == EPERM
+    private func vpnProcessExists(_ pid: pid_t) -> Bool {
+        kill(pid, 0) == 0 || errno == EPERM
     }
 
-    /// 等价于原来的 zc-vpn-status，但不再启动子进程：
-    /// - `kill(pid, 0)` 判断 PID 是否存活（root 进程对普通用户返回 EPERM，也算存活）；
-    /// - 每 30 秒（或 PID 变化时）用一次 `ps` 核对命令行，避免 pidfile 残留撞上被复用的 PID。
+    /// 读进程启动时间（微秒），用于区分「同一个 PID 的不同进程实例」。
+    /// sysctl 对 root 进程也可读；读取失败时返回 nil，退化为只按 PID 缓存。
+    private func processStartTime(_ pid: pid_t) -> UInt64? {
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        let r = sysctl(&mib, u_int(mib.count), &info, &size, nil, 0)
+        guard r == 0, size == MemoryLayout<kinfo_proc>.stride else { return nil }
+        return UInt64(info.kp_proc.p_starttime.tv_sec) * 1_000_000
+            + UInt64(info.kp_proc.p_starttime.tv_usec)
+    }
+
+    /// 等价于原来的 zc-vpn-status，但稳态下不启动任何子进程：
+    /// - `kill(pid, 0)` 每次轮询都做（系统调用，成本可忽略）；
+    /// - 只有首次见到某个 PID、或启动时间变了（PID 被复用）时，才用一次 `ps` 校验命令行。
     /// 只在主线程调用（缓存不设锁）。
     private func vpnProcessAlive() -> Bool {
-        guard let pid = currentVPNPID() else { return false }
-
-        let now = Date()
-        if !vpnProcessExists() {
-            statusCachePID = pid
-            statusCacheAlive = false
-            statusCacheTime = now
+        guard let pid = currentVPNPID(), vpnProcessExists(pid) else {
+            statusVerifiedPID = -1
+            statusVerifiedStart = nil
+            statusVerifiedAlive = false
             return false
         }
-        if pid == statusCachePID && now.timeIntervalSince(statusCacheTime) <= 30 {
-            return statusCacheAlive
+        let start = processStartTime(pid)
+        if pid == statusVerifiedPID && start == statusVerifiedStart {
+            return statusVerifiedAlive
         }
 
         // -ww：不按终端宽度截断命令行
         let (code, out) = run("/bin/ps", ["-ww", "-p", "\(pid)", "-o", "command="])
-        statusCachePID = pid
-        statusCacheAlive = code == 0 && out.contains(vpnDir + "/zc-tun.sh")
-        statusCacheTime = now
-        return statusCacheAlive
+        guard code == 0 else { return false }  // ps 自身失败：不写缓存，下个 tick 重试
+        statusVerifiedPID = pid
+        statusVerifiedStart = start
+        statusVerifiedAlive = out.contains(vpnDir + "/zc-tun.sh")
+        return statusVerifiedAlive
     }
 
     /// 完整校验（pidfile + 存活 + 命令行），不碰缓存，可在后台线程调用。
     private func vpnProcessVerified() -> Bool {
-        guard let pid = currentVPNPID(), vpnProcessExists() else { return false }
+        guard let pid = currentVPNPID(), vpnProcessExists(pid) else { return false }
         let (code, out) = run("/bin/ps", ["-ww", "-p", "\(pid)", "-o", "command="])
         return code == 0 && out.contains(vpnDir + "/zc-tun.sh")
     }
