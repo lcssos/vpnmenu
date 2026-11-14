@@ -109,8 +109,9 @@ extension AppDelegate {
     private func switchAndReconnect() {
         guard !busy else { return }
         beginBusy("VPN：切换配置…")
+        let backend = currentTunnelBackend()
         DispatchQueue.global().async {
-            _ = run("/usr/bin/sudo", ["-n", VPMPaths.off])
+            _ = run("/usr/bin/sudo", ["-n", backend.disconnectScript])
             DispatchQueue.main.async {
                 self.finishBusy()
                 self.connect()

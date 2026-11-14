@@ -27,8 +27,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var lastIconLog = ""
     var tunnelBackend: VPNBackend?
 
-    let monitor = VPNMonitor()
-
     // 配置（只从本机目录读取）
     var profileMenuItem: NSMenuItem!
     var profilesMenu: NSMenu!

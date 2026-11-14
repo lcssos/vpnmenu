@@ -12,10 +12,8 @@ extension AppDelegate {
     end run
     """
 
-    func needsInstall(_ output: String) -> Bool {
-        if !FileManager.default.fileExists(atPath: VPMPaths.sudoers) { return true }
-        let t = output.lowercased()
-        return t.contains("password is required") || t.contains("terminal is required")
+    func needsInstall(_ backend: VPNBackend, _ output: String) -> Bool {
+        backend.needsInstall(output: output)
     }
 
     func askInstall(completion: @escaping (Bool) -> Void) {
@@ -36,10 +34,11 @@ extension AppDelegate {
             return
         }
         statusLine.title = "VPN：正在安装…"
+        let backend = currentTunnelBackend()
         DispatchQueue.global().async {
             let (code, out) = run("/usr/bin/osascript",
-                                  ["-e", Self.installScript, VPMPaths.install,
-                                   VPMPaths.vpnDir, NSUserName()])
+                                  ["-e", Self.installScript, backend.installScript,
+                                   backend.installDir, NSUserName()])
             let ok = (code == 0) && out.contains("INSTALL_OK")
             DispatchQueue.main.async {
                 if !ok { self.alert("安装失败", out) }
@@ -58,10 +57,11 @@ extension AppDelegate {
         guard a.runModal() == .alertFirstButtonReturn else { return }
 
         beginBusy("VPN：正在安装…")
+        let backend = currentTunnelBackend()
         DispatchQueue.global().async {
             let (code, out) = run("/usr/bin/osascript",
-                                  ["-e", Self.installScript, VPMPaths.install,
-                                   VPMPaths.vpnDir, NSUserName()])
+                                  ["-e", Self.installScript, backend.installScript,
+                                   backend.installDir, NSUserName()])
             let ok = (code == 0) && out.contains("INSTALL_OK")
             DispatchQueue.main.async {
                 self.finishBusy()

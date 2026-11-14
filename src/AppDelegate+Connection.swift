@@ -22,8 +22,9 @@ extension AppDelegate {
         reloadProfiles(force: true)
         guard profiles.count == 1 else { return }
         let sel = profiles[0]
-        guard monitor.alivePID() == nil else { return }
-        guard FileManager.default.fileExists(atPath: VPMPaths.sudoers) else {
+        guard BackendRegistry.live() == nil else { return }
+        guard let backend = BackendRegistry.backend(for: sel.profile) else { return }
+        guard FileManager.default.fileExists(atPath: backend.sudoersPath) else {
             logLine("auto-connect skipped: sudoers not installed")
             return
         }
@@ -41,15 +42,20 @@ extension AppDelegate {
             if promptCredential(for: sel) { startConnect(sel) }
             return
         }
+        guard let backend = BackendRegistry.backend(for: sel.profile) else {
+            alert("无法连接", "不支持的 VPN 类型：\(sel.profile.backendID)")
+            return
+        }
+        tunnelBackend = backend
         beginBusy("VPN：连接中…")
 
-        let payload = connectionPayload(sel.profile, cred)
+        let payload = backend.payload(sel.profile, cred)
         DispatchQueue.global().async {
-            let (code, out) = runWithInput("/usr/bin/sudo", ["-n", VPMPaths.on], payload)
+            let (code, out) = runWithInput("/usr/bin/sudo", ["-n", backend.connectScript], payload)
             DispatchQueue.main.async {
                 if code == 0 {
-                    self.waitForConnected()
-                } else if self.needsInstall(out) {
+                    self.waitForConnected(backend: backend)
+                } else if self.needsInstall(backend, out) {
                     self.askInstall { ok in
                         if ok { self.startAfterInstall(sel) } else { self.finishBusy() }
                     }
@@ -62,6 +68,11 @@ extension AppDelegate {
     }
 
     private func startAfterInstall(_ sel: (id: String, profile: Profile)) {
+        guard let backend = BackendRegistry.backend(for: sel.profile) else {
+            alert("无法连接", "不支持的 VPN 类型：\(sel.profile.backendID)")
+            return
+        }
+        tunnelBackend = backend
         beginBusy("VPN：连接中…")
         DispatchQueue.global().async {
             guard let cred = loadCredential(for: sel.id) else {
@@ -71,11 +82,11 @@ extension AppDelegate {
                 }
                 return
             }
-            let payload = connectionPayload(sel.profile, cred)
-            let (code, out) = runWithInput("/usr/bin/sudo", ["-n", VPMPaths.on], payload)
+            let payload = backend.payload(sel.profile, cred)
+            let (code, out) = runWithInput("/usr/bin/sudo", ["-n", backend.connectScript], payload)
             DispatchQueue.main.async {
                 if code == 0 {
-                    self.waitForConnected()
+                    self.waitForConnected(backend: backend)
                 } else {
                     self.finishBusy()
                     self.alert("连接失败", out)
@@ -108,10 +119,11 @@ extension AppDelegate {
         }
         beginBusy("VPN：断开中…")
 
+        let backend = currentTunnelBackend()
         DispatchQueue.global().async {
-            let (code, out) = run("/usr/bin/sudo", ["-n", VPMPaths.off])
+            let (code, out) = run("/usr/bin/sudo", ["-n", backend.disconnectScript])
             DispatchQueue.main.async {
-                if code != 0 && self.needsInstall(out) {
+                if code != 0 && self.needsInstall(backend, out) {
                     self.askInstall { ok in
                         if ok { self.stopAfterInstall() } else { self.finishBusy() }
                     }
@@ -123,13 +135,14 @@ extension AppDelegate {
     }
 
     private func stopAfterInstall() {
+        let backend = currentTunnelBackend()
         DispatchQueue.global().async {
-            _ = run("/usr/bin/sudo", ["-n", VPMPaths.off])
+            _ = run("/usr/bin/sudo", ["-n", backend.disconnectScript])
             DispatchQueue.main.async { self.finishBusy() }
         }
     }
 
-    private func waitForConnected() {
+    private func waitForConnected(backend: VPNBackend) {
         waitingReady = true
         cancelWait = false
         DispatchQueue.global().async {
@@ -138,8 +151,8 @@ extension AppDelegate {
             // utun 就绪通常几秒；90 秒覆盖 DNS 等待和多个域名的重试上限
             for i in 0..<90 {
                 sleep(1)
-                if self.monitor.readyVerified() { break }
-                if self.monitor.processPresent() {
+                if backend.readyVerified() { break }
+                if backend.processPresent() {
                     sawProcess = true
                 } else if sawProcess || i >= 5 {
                     processDied = true  // 启动后很快退出，或 5 秒内根本没起来

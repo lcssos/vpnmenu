@@ -39,10 +39,11 @@ extension AppDelegate {
 
     @objc func openLog() {
         let fm = FileManager.default
-        if fm.fileExists(atPath: VPMPaths.logFile) {
-            NSWorkspace.shared.open(URL(fileURLWithPath: VPMPaths.logFile))
+        let logFile = currentTunnelBackend().logFile
+        if fm.fileExists(atPath: logFile) {
+            NSWorkspace.shared.open(URL(fileURLWithPath: logFile))
         } else {
-            let dir = (VPMPaths.logFile as NSString).deletingLastPathComponent
+            let dir = (logFile as NSString).deletingLastPathComponent
             try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
             NSWorkspace.shared.open(URL(fileURLWithPath: dir))
         }
@@ -58,12 +59,13 @@ extension AppDelegate {
     /// 所以放到后台执行，期间菜单显示“断开中…”。
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // 没有隧道时直接退出；busy 时可能连接命令还在飞，交给 zc-vpn-off 兜底
-        guard busy || monitor.processPresent() else { return .terminateNow }
+        guard busy || BackendRegistry.anyActiveProcess() else { return .terminateNow }
         guard !quitting else { return .terminateLater }
         quitting = true
         beginBusy("VPN：断开中…")
+        let backend = currentTunnelBackend()
         DispatchQueue.global().async {
-            let (code, out) = run("/usr/bin/sudo", ["-n", VPMPaths.off])
+            let (code, out) = run("/usr/bin/sudo", ["-n", backend.disconnectScript])
             DispatchQueue.main.async {
                 if code != 0 {
                     logLine("quit: zc-vpn-off failed (\(code)): \(out)")

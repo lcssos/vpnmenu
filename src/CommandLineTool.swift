@@ -72,8 +72,12 @@ func runCommandLineToolIfRequested() {
             printErr("钥匙串里没有「\(sel.profile.name)」的凭据")
             exit(3)
         }
-        let (code, out) = runWithInput("/usr/bin/sudo", ["-n", VPMPaths.on],
-                                       connectionPayload(sel.profile, cred))
+        guard let backend = BackendRegistry.backend(for: sel.profile) else {
+            printErr("不支持的 VPN 类型：\(sel.profile.backendID)")
+            exit(4)
+        }
+        let (code, out) = runWithInput("/usr/bin/sudo", ["-n", backend.connectScript],
+                                       backend.payload(sel.profile, cred))
         print(out, terminator: "")
         exit(code)
     }
