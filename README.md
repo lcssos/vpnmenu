@@ -110,7 +110,15 @@ sudoers 组件已安装，且当前没有活动隧道。缺凭据或未安装时
 源码（进 git）：
 
 ```
-src/main.swift          菜单栏 App 源码（状态、连接/断开、配置、钥匙串、安装提示、自启动）
+src/main.swift          入口（CLI 辅助模式、单实例锁、启动菜单栏 App）
+src/AppDelegate*.swift  菜单栏界面与业务（状态、连接/断开、配置、钥匙串、安装、退出）
+src/Profile.swift       配置模型、校验与本地存储
+src/Keychain.swift      钥匙串凭据与连接参数编码
+src/VPNMonitor.swift    隧道进程/就绪/DNS 状态检查
+src/Process.swift       外部命令执行
+src/Paths.swift         组件与运行期文件路径
+src/CommandLineTool.swift  命令行辅助模式
+src/SingleInstance.swift   单实例锁
 src/Info.plist          bundle 元信息（LSUIElement=true，CFBundleIconFile=VPNMenu）
 runtime/vpn/            运行期脚本（zc-*.sh、install.sh、组件说明）
 docs/profile.example.json  配置格式示例（占位值，可直接作为导入模板）

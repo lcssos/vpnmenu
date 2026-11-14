@@ -89,11 +89,11 @@ App 位置与自启动：
 ~/Library/LaunchAgents/com.lcssos.vpnmenu.plist   # 登录自动启动
 ```
 
-源码在 `~/opt/vpnmenu/src/`（`main.swift` + `Info.plist`），重新编译安装：
+源码在 `~/opt/vpnmenu/src/`（`*.swift` + `Info.plist`），重新编译安装：
 
 ```bash
 cd ~/opt/vpnmenu
-swiftc -O -swift-version 5 -framework Cocoa -o VPNMenu.app/Contents/MacOS/VPNMenu src/main.swift
+swiftc -O -swift-version 5 -framework Cocoa -o VPNMenu.app/Contents/MacOS/VPNMenu src/*.swift
 codesign --force --sign - --timestamp=none VPNMenu.app
 rm -rf ~/Applications/VPNMenu.app && cp -R VPNMenu.app ~/Applications/
 launchctl kickstart -k gui/$(id -u)/com.lcssos.vpnmenu

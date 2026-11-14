@@ -1,0 +1,179 @@
+// Copyright (C) 2026 lcssos
+// SPDX-License-Identifier: AGPL-3.0-only
+
+import Cocoa
+
+// MARK: - 连接 / 断开
+
+extension AppDelegate {
+    @objc func connect() {
+        guard !busy else { return }
+        guard let sel = selectedProfile() else {
+            showNoProfile()
+            return
+        }
+        startConnect(sel)
+    }
+
+    /// 启动时的自动连接：只在「本机只有一个配置、凭据已在钥匙串、组件已安装、
+    /// 当前没有活动隧道」时执行。缺凭据/未安装组件时静默跳过，避免登录时弹窗。
+    func autoConnectIfNeeded() {
+        guard !busy, !quitting else { return }
+        reloadProfiles(force: true)
+        guard profiles.count == 1 else { return }
+        let sel = profiles[0]
+        guard !monitor.processAlive() else { return }
+        guard FileManager.default.fileExists(atPath: VPMPaths.sudoers) else {
+            logLine("auto-connect skipped: sudoers not installed")
+            return
+        }
+        guard loadCredential(for: sel.id) != nil else {
+            logLine("auto-connect skipped: no credential for \(sel.id)")
+            return
+        }
+        logLine("auto-connect: \(sel.profile.name)")
+        startConnect(sel)
+    }
+
+    private func startConnect(_ sel: (id: String, profile: Profile)) {
+        // 凭据只在钥匙串里；没有就先让用户录入
+        guard let cred = loadCredential(for: sel.id) else {
+            if promptCredential(for: sel) { startConnect(sel) }
+            return
+        }
+        beginBusy("VPN：连接中…")
+
+        let payload = connectionPayload(sel.profile, cred)
+        DispatchQueue.global().async {
+            let (code, out) = runWithInput("/usr/bin/sudo", ["-n", VPMPaths.on], payload)
+            DispatchQueue.main.async {
+                if code == 0 {
+                    self.waitForConnected()
+                } else if self.needsInstall(out) {
+                    self.askInstall { ok in
+                        if ok { self.startAfterInstall(sel) } else { self.finishBusy() }
+                    }
+                } else {
+                    self.finishBusy()
+                    self.alert("连接失败", out)
+                }
+            }
+        }
+    }
+
+    private func startAfterInstall(_ sel: (id: String, profile: Profile)) {
+        beginBusy("VPN：连接中…")
+        DispatchQueue.global().async {
+            guard let cred = loadCredential(for: sel.id) else {
+                DispatchQueue.main.async {
+                    self.finishBusy()
+                    self.alert("缺少账号", "请先在菜单栏「设置账号…」里录入 VPN 账号和密码。")
+                }
+                return
+            }
+            let payload = connectionPayload(sel.profile, cred)
+            let (code, out) = runWithInput("/usr/bin/sudo", ["-n", VPMPaths.on], payload)
+            DispatchQueue.main.async {
+                if code == 0 {
+                    self.waitForConnected()
+                } else {
+                    self.finishBusy()
+                    self.alert("连接失败", out)
+                }
+            }
+        }
+    }
+
+    private func showNoProfile() {
+        let a = NSAlert()
+        a.messageText = "还没有 VPN 配置"
+        a.informativeText = """
+        配置不随 App 分发，也不在公开仓库里。
+        请导入一份 JSON 配置（服务器、端口、需要走隧道的域名）。
+        账号密码随后在「设置账号…」里录入，保存在钥匙串。
+        """
+        a.addButton(withTitle: "导入配置…")
+        a.addButton(withTitle: "取消")
+        NSApp.activate(ignoringOtherApps: true)
+        if a.runModal() == .alertFirstButtonReturn { importProfileAction() }
+    }
+
+    @objc func disconnect() {
+        if waitingReady {
+            // 取消「等待就绪」：后台循环会因进程消失而退出，别再弹失败提示
+            cancelWait = true
+            waitingReady = false
+        } else if busy {
+            return
+        }
+        beginBusy("VPN：断开中…")
+
+        DispatchQueue.global().async {
+            let (code, out) = run("/usr/bin/sudo", ["-n", VPMPaths.off])
+            DispatchQueue.main.async {
+                if code != 0 && self.needsInstall(out) {
+                    self.askInstall { ok in
+                        if ok { self.stopAfterInstall() } else { self.finishBusy() }
+                    }
+                } else {
+                    self.finishBusy()
+                }
+            }
+        }
+    }
+
+    private func stopAfterInstall() {
+        DispatchQueue.global().async {
+            _ = run("/usr/bin/sudo", ["-n", VPMPaths.off])
+            DispatchQueue.main.async { self.finishBusy() }
+        }
+    }
+
+    private func waitForConnected() {
+        waitingReady = true
+        cancelWait = false
+        DispatchQueue.global().async {
+            var sawProcess = false
+            var processDied = false
+            // utun 就绪通常几秒；90 秒覆盖 DNS 等待和多个域名的重试上限
+            for i in 0..<90 {
+                sleep(1)
+                if self.monitor.readyVerified() { break }
+                if self.monitor.processPresent() {
+                    sawProcess = true
+                } else if sawProcess || i >= 5 {
+                    processDied = true  // 启动后很快退出，或 5 秒内根本没起来
+                    break
+                }
+            }
+            DispatchQueue.main.async {
+                self.waitingReady = false
+                guard !self.quitting else { return }  // 退出流程自己会终止 App
+                self.finishBusy()
+                // 只有「进程中途退出」才算失败；仍在启动（超时未就绪）继续显示“连接中…”，
+                // 用户可以断开取消。手动断开时不报失败。
+                if processDied && !self.cancelWait {
+                    self.alert("连接没有成功",
+                               "zju-connect 在隧道就绪前退出了。请打开日志查看原因。")
+                }
+                self.cancelWait = false
+            }
+        }
+    }
+
+    /// 进入「操作进行中」状态：提示文字 + 图标在实心/空心锁之间切换
+    func beginBusy(_ title: String) {
+        busy = true
+        statusLine.title = title
+        connectItem.isEnabled = false
+        disconnectItem.isEnabled = false
+        reinstallItem.isEnabled = false
+        startBusyAnimation()
+    }
+
+    func finishBusy() {
+        busy = false
+        stopBusyAnimation()
+        refresh()
+    }
+}

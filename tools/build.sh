@@ -4,7 +4,7 @@
 # 从源码组装通用（x86_64 + arm64）VPNMenu.app
 #
 # 源码分布：
-#   src/main.swift + src/Info.plist   App 本体
+#   src/*.swift + src/Info.plist      App 本体
 #   runtime/vpn/                      运行期脚本与配置（zc-*.sh、vpn.conf、install.sh）
 #   vendor/zju-connect-darwin-*       两种架构的 zju-connect（可由 GitHub release 重新获取）
 #   assets/                           图标产物（缺失时会自动生成）
@@ -38,6 +38,7 @@ BUILD="$ROOT/build"
 RUNTIME="$ROOT/runtime/vpn"
 VENDOR="$ROOT/vendor"
 ASSETS="$ROOT/assets"
+SOURCES=("$ROOT"/src/*.swift)
 
 mkdir -p "$BUILD" "$ASSETS"
 
@@ -60,11 +61,11 @@ fi
 # ---------- App 本体 ----------
 echo "== 编译 x86_64"
 swiftc -O -swift-version 5 -target x86_64-apple-macos11.0 \
-  -framework Cocoa -framework Security -o "$BUILD/VPNMenu-x86_64" "$ROOT/src/main.swift"
+  -framework Cocoa -framework Security -o "$BUILD/VPNMenu-x86_64" "${SOURCES[@]}"
 
 echo "== 编译 arm64"
 swiftc -O -swift-version 5 -target arm64-apple-macos11.0 \
-  -framework Cocoa -framework Security -o "$BUILD/VPNMenu-arm64" "$ROOT/src/main.swift"
+  -framework Cocoa -framework Security -o "$BUILD/VPNMenu-arm64" "${SOURCES[@]}"
 
 lipo -create "$BUILD/VPNMenu-x86_64" "$BUILD/VPNMenu-arm64" -output "$BUILD/VPNMenu"
 
