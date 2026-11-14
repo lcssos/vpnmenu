@@ -60,7 +60,7 @@ extension AppDelegate {
               let filled = tintedSymbol("lock.shield.fill", color: color) else { return }
 
         // 先显示与当前状态相反的那一个，点下去立刻有反馈
-        let connectedNow = monitor.processAlive()
+        let connectedNow = monitor.alivePID() != nil
         let ordered = connectedNow ? [hollow, filled] : [filled, hollow]
 
         // 两个符号的包围盒可能差零点几像素；统一画布，切换时菜单栏图标不会左右跳

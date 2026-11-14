@@ -40,29 +40,31 @@ final class VPNMonitor {
             + UInt64(info.kp_proc.p_starttime.tv_usec)
     }
 
-    /// 等价于原来的 zc-vpn-status，但稳态下不启动任何子进程：
+    /// 等价于原来的 zc-vpn-status，存活时返回包装脚本 PID、否则返回 nil。
+    /// 顺带返回 PID 供调用方做就绪校验，避免一次轮询里重复读 pidfile。
+    /// 稳态下不启动任何子进程：
     /// - `kill(pid, 0)` 每次轮询都做（系统调用，成本可忽略）；
     /// - 只有首次见到某个 PID、或启动时间变了（PID 被复用）时，才用一次 `ps` 校验命令行。
     /// 只在主线程调用（缓存不设锁）。
-    func processAlive() -> Bool {
+    func alivePID() -> pid_t? {
         guard let pid = currentPID(), processExists(pid) else {
             verifiedPID = -1
             verifiedStart = nil
             verifiedAlive = false
-            return false
+            return nil
         }
         let start = processStartTime(pid)
         if pid == verifiedPID && start == verifiedStart {
-            return verifiedAlive
+            return verifiedAlive ? pid : nil
         }
 
         // -ww：不按终端宽度截断命令行
         let (code, out) = run("/bin/ps", ["-ww", "-p", "\(pid)", "-o", "command="])
-        guard code == 0 else { return false }  // ps 自身失败：不写缓存，下个 tick 重试
+        guard code == 0 else { return nil }  // ps 自身失败：不写缓存，下个 tick 重试
         verifiedPID = pid
         verifiedStart = start
         verifiedAlive = out.contains(VPMPaths.vpnDir + "/zc-tun.sh")
-        return verifiedAlive
+        return verifiedAlive ? pid : nil
     }
 
     /// 就绪标记由 zc-tun.sh 在 utun 就绪、初始路由写好后写入，内容是「包装脚本 PID 子进程 PID」。

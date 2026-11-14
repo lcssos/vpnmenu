@@ -22,7 +22,7 @@ extension AppDelegate {
         reloadProfiles(force: true)
         guard profiles.count == 1 else { return }
         let sel = profiles[0]
-        guard !monitor.processAlive() else { return }
+        guard monitor.alivePID() == nil else { return }
         guard FileManager.default.fileExists(atPath: VPMPaths.sudoers) else {
             logLine("auto-connect skipped: sudoers not installed")
             return

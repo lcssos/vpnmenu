@@ -120,8 +120,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func refresh() {
         reloadProfiles()
-        let processAlive = monitor.processAlive()
-        let ready = monitor.currentPID().map { monitor.tunnelReady($0) } ?? false
+        let pid = monitor.alivePID()
+        let processAlive = pid != nil
+        let ready = pid.map { monitor.tunnelReady($0) } ?? false
         let connected = processAlive && ready
         // DNS 兜底只在完全没有包装脚本时做；连接中 / 已连接都不能碰
         if !processAlive && monitor.hasStaleDNS() && !busy {
