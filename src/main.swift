@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import Cocoa
+import Darwin
 import Security
 
 @discardableResult
@@ -278,8 +279,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }()
     private var onPath: String { vpnDir + "/zc-vpn-on" }
     private var offPath: String { vpnDir + "/zc-vpn-off" }
-    private var statusPath: String { vpnDir + "/zc-vpn-status" }
     private var installPath: String { vpnDir + "/install.sh" }
+
+    // 状态检查在进程内完成，不再每 2 秒 fork 一个 zc-vpn-status。
+    // pidfile 里是 root 包装脚本 zc-tun.sh 的 PID；kill(0) 只做存在性检查，
+    // 命令行校验（防 PID 复用）按 PID 变化 / 每 30 秒用一次 ps。
+    private let statusPidFile = "/var/run/zju-connect.pid"
+    private var statusCachePID: pid_t = -1
+    private var statusCacheAlive = false
+    private var statusCacheTime = Date.distantPast
     private var logPath: String { NSHomeDirectory() + "/Library/Logs/VPNMenu/zju-connect.log" }
     private let sudoersPath = "/etc/sudoers.d/vpnmenu"
 
@@ -432,7 +440,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let id = sender.representedObject as? String, id != selectedID else { return }
         guard let target = profiles.first(where: { $0.id == id }) else { return }
 
-        let connected = run(statusPath, []).0 == 0
+        let connected = vpnProcessAlive()
         if connected {
             let a = NSAlert()
             a.messageText = "切换到「\(target.profile.name)」？"
@@ -479,7 +487,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         let name = ProfileStore.list().first(where: { $0.id == id })?.profile.name ?? "新配置"
-        let connected = run(statusPath, []).0 == 0
+        let connected = vpnProcessAlive()
         if connected {
             // 不悄悄切走正在使用的配置；断开后再让用户选择
             alert("导入成功", "配置「\(name)」已导入。当前连接仍使用原配置；断开后可在「配置」里切换。")
@@ -531,9 +539,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refresh() {
         reloadProfiles()
-        let (code, out) = run(statusPath, [])
-        let connected = (code == 0)
-        if !connected && out.contains("dns=stale") { repairStaleDNS() }
+        let connected = vpnProcessAlive()
+        if !connected && hasStaleVPNDNS() { repairStaleDNS() }
         connectItem.isEnabled = !connected && !busy
         disconnectItem.isEnabled = connected && !busy
         reinstallItem.isEnabled = !busy
@@ -547,6 +554,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             statusLine.title = "VPN：未连接"
         }
         setIcon(connected: connected)
+    }
+
+    private func currentVPNPID() -> pid_t? {
+        guard let text = try? String(contentsOfFile: statusPidFile, encoding: .utf8),
+              let value = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)),
+              value > 0 else { return nil }
+        return value
+    }
+
+    /// 只做存在性检查（可在后台线程调用）。root 进程对普通用户执行 kill(0) 会返回
+    /// EPERM，同样说明进程还活着；ESRCH 才是真的没了。
+    private func vpnProcessExists() -> Bool {
+        guard let pid = currentVPNPID() else { return false }
+        return kill(pid, 0) == 0 || errno == EPERM
+    }
+
+    /// 等价于原来的 zc-vpn-status，但不再启动子进程：
+    /// - `kill(pid, 0)` 判断 PID 是否存活（root 进程对普通用户返回 EPERM，也算存活）；
+    /// - 每 30 秒（或 PID 变化时）用一次 `ps` 核对命令行，避免 pidfile 残留撞上被复用的 PID。
+    /// 只在主线程调用（缓存不设锁）。
+    private func vpnProcessAlive() -> Bool {
+        guard let pid = currentVPNPID() else { return false }
+
+        let now = Date()
+        if !vpnProcessExists() {
+            statusCachePID = pid
+            statusCacheAlive = false
+            statusCacheTime = now
+            return false
+        }
+        if pid == statusCachePID && now.timeIntervalSince(statusCacheTime) <= 30 {
+            return statusCacheAlive
+        }
+
+        // -ww：不按终端宽度截断命令行
+        let (code, out) = run("/bin/ps", ["-ww", "-p", "\(pid)", "-o", "command="])
+        statusCachePID = pid
+        statusCacheAlive = code == 0 && out.contains(vpnDir + "/zc-tun.sh")
+        statusCacheTime = now
+        return statusCacheAlive
+    }
+
+    /// 完整校验（pidfile + 存活 + 命令行），不碰缓存，可在后台线程调用。
+    private func vpnProcessVerified() -> Bool {
+        guard let pid = currentVPNPID(), vpnProcessExists() else { return false }
+        let (code, out) = run("/bin/ps", ["-ww", "-p", "\(pid)", "-o", "command="])
+        return code == 0 && out.contains(vpnDir + "/zc-tun.sh")
+    }
+
+    /// zju-connect panic 时可能把系统 DNS 留在 2.0.1.x（隧道已死、不可达）。
+    private func hasStaleVPNDNS() -> Bool {
+        guard let text = try? String(contentsOfFile: "/etc/resolv.conf", encoding: .utf8) else {
+            return false
+        }
+        // (?m) 多行模式：只匹配行首的 nameserver
+        return text.range(of: #"(?m)^nameserver[ \t]+2\.0\.1\.[0-9]+"#,
+                          options: .regularExpression) != nil
     }
 
     /// zju-connect 在 panic 时不会还原被 -dns-hijack 改写的系统 DNS（留在 2.0.1.x），
@@ -744,7 +808,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.global().async {
             for _ in 0..<40 {
                 sleep(1)
-                if run(self.statusPath, []).0 == 0 { break }
+                if self.vpnProcessVerified() { break }
             }
             DispatchQueue.main.async { self.finishBusy() }
         }
@@ -767,7 +831,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               let filled = tintedSymbol("lock.shield.fill", color: color) else { return }
 
         // 先显示与当前状态相反的那一个，点下去立刻有反馈
-        let connectedNow = run(statusPath, []).0 == 0
+        let connectedNow = vpnProcessAlive()
         let ordered = connectedNow ? [hollow, filled] : [filled, hollow]
 
         // 两个符号的包围盒可能差零点几像素；统一画布，切换时菜单栏图标不会左右跳

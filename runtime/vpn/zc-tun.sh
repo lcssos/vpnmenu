@@ -69,6 +69,14 @@ while IFS= read -r svc; do
 done < <(networksetup -listallnetworkservices 2>/dev/null | tail -n +2 | sed 's/^\*//')
 chmod 644 "$DNS_SNAPSHOT" 2>/dev/null || true
 
+# 日志轮转：超过 5MB 时把上一份留成 .1，避免长期使用无限增长
+if [[ -f "$LOG" ]]; then
+  LOG_SIZE=$(/usr/bin/stat -f%z "$LOG" 2>/dev/null || echo 0)
+  if (( LOG_SIZE > 5 * 1024 * 1024 )); then
+    mv -f "$LOG" "$LOG.1" 2>/dev/null || true
+  fi
+fi
+
 "$DIR/zju-connect" -server "$VPN_SERVER" -port "$VPN_PORT" -username "$VPN_ACCOUNT" \
   -disable-zju-config -remote-dns-server auto \
   ${EXTRA[@]+"${EXTRA[@]}"} \
@@ -130,7 +138,9 @@ add_domain_routes
 while /bin/kill -0 "$VPN_PID" 2>/dev/null; do
   for _ in $(seq 1 60); do
     /bin/kill -0 "$VPN_PID" 2>/dev/null || break 2
-    sleep 5
+    # 用「后台 sleep + wait」而不是前台 sleep：让 TERM/INT 能立刻打断等待，
+    # 点「断开」不用等满 5 秒才执行 cleanup trap。
+    sleep 5 & wait $!
   done
   add_domain_routes
 done
