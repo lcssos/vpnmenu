@@ -5,7 +5,9 @@
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PIDFILE=/var/run/zju-connect.pid
 READYFILE=/var/run/zju-connect.ready
+CLEANFILE=/var/run/zju-connect.clean
 
+RESTORE_NEEDED=yes
 if [[ -f "$PIDFILE" ]]; then
   PID=$(cat "$PIDFILE")
   # pidfile 里是 zc-tun.sh 包装脚本的 pid；崩溃后 PID 可能被系统复用，先确认再杀
@@ -15,16 +17,24 @@ if [[ -f "$PIDFILE" ]]; then
       /bin/kill -0 "$PID" 2>/dev/null || break
       sleep 0.5
     done
-    /bin/kill -9 "$PID" 2>/dev/null
+    if /bin/kill -0 "$PID" 2>/dev/null; then
+      # 包装脚本没能自己收尾，强制结束；此时 DNS 可能没还原
+      /bin/kill -9 "$PID" 2>/dev/null
+    elif [[ -f "$CLEANFILE" ]]; then
+      # 正常 TERM 退出：zc-tun.sh 的 EXIT trap 已经完整做过 DNS 还原，不必再来一次
+      RESTORE_NEEDED=no
+    fi
   fi
 fi
-rm -f "$PIDFILE" "$READYFILE"
+rm -f "$PIDFILE" "$READYFILE" "$CLEANFILE"
 
 # 兜底：清掉可能残留的进程（只匹配本 App 内的二进制）
 pkill -f "$DIR/zju-connect" 2>/dev/null
 
-# 上次 panic / 强杀可能留下 VPN 内网 DNS（2.0.1.x），这里按快照还原；
-# 没有残留时是一次无副作用的检查。
-/bin/bash "$DIR/zc-dns-restore" >/dev/null 2>&1 || true
+# 上次 panic / 强杀可能留下 VPN 内网 DNS（2.0.1.x），这里按快照还原。
+# 包装脚本正常退出时它的 EXIT trap 已经还原过，跳过这次（省 ~1.5s）。
+if [[ "$RESTORE_NEEDED" == yes ]]; then
+  /bin/bash "$DIR/zc-dns-restore" >/dev/null 2>&1 || true
+fi
 
 echo "stopped"

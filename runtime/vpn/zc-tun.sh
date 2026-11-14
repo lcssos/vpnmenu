@@ -12,6 +12,8 @@ PIDFILE=/var/run/zju-connect.pid
 # 隧道真正可用（utun 就绪、初始 /32 路由写好）后才写这个标记。
 # App 和 zc-vpn-status 都以它为准，避免把“进程还在等 utun”误报成已连接。
 READYFILE=/var/run/zju-connect.ready
+# cleanup 完整跑完（含 DNS 还原）后写入，供 zc-vpn-off 判断是否需要再做一次兜底还原
+CLEANFILE=/var/run/zju-connect.clean
 
 : "${VPN_SERVER:?缺少服务器地址}"
 VPN_PORT="${VPN_PORT:-4430}"
@@ -40,7 +42,7 @@ if [[ -f "$PIDFILE" ]] && /bin/kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
   exit 0
 fi
 # 清掉上一次可能残留的就绪标记，等本次 utun / 路由真正就绪后再写
-rm -f "$READYFILE"
+rm -f "$READYFILE" "$CLEANFILE"
 echo "$$" > "$PIDFILE"
 
 # 账号/密码由 zc-vpn-on 从 App 的 stdin 读入后通过环境变量传入，不落盘。
@@ -95,6 +97,8 @@ cleanup() {
   rm -f "$PIDFILE" "$READYFILE"
   # 正常退出时 zju-connect 已自己清过 DNS，这一步是 panic/强杀时的兜底
   /bin/bash "$DIR/zc-dns-restore" >/dev/null 2>&1 || true
+  : > "$CLEANFILE" 2>/dev/null || true
+  chmod 644 "$CLEANFILE" 2>/dev/null || true
 }
 trap cleanup EXIT
 trap 'exit 0' TERM INT
@@ -133,21 +137,54 @@ if [[ ${#DOMAINS[@]} -gt 0 ]]; then
   done
 fi
 
+resolve_domain() {
+  local d="$1" ips
+  # 两次足够覆盖偶发失败；无 A 记录的域名不再白等 3×2s。
+  # 仍未解析出来的域名由 5 分钟一次的后台刷新兜底。
+  for _ in 1 2; do
+    ips=$(dig @"$VPN_DNS" +time=2 +tries=1 +short "$d" 2>/dev/null \
+      | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
+    [[ -n "$ips" ]] && { printf '%s\n' "$ips"; return 0; }
+    sleep 1
+  done
+  return 0
+}
+
 add_domain_routes() {
   [[ ${#DOMAINS[@]} -eq 0 ]] && return 0
-  local d ips ip
+  local d ip i p
+  local -a pids=()
+  local tmp
+  if ! tmp=$(mktemp -d "${TMPDIR:-/tmp}/vpnmenu-routes.XXXXXX"); then
+    # 拿不到临时目录时退回串行，功能不受影响
+    for d in "${DOMAINS[@]}"; do
+      for ip in $(resolve_domain "$d"); do
+        route -n add -host "$ip" -interface "$VPN_IF" >/dev/null 2>&1 || true
+      done
+    done
+    return 0
+  fi
+
+  # 并发解析：慢域名（内网 DNS 要等 10+ 秒）不再串行拖累后续域名。
+  # 每个子进程把解析结果写到独立文件，最后统一加路由。
+  i=0
   for d in "${DOMAINS[@]}"; do
-    ips=""
-    for _ in 1 2 3; do
-      ips=$(dig @"$VPN_DNS" +time=2 +tries=1 +short "$d" 2>/dev/null \
-        | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
-      [[ -n "$ips" ]] && break
-      sleep 1
-    done
-    for ip in $ips; do
-      route -n add -host "$ip" -interface "$VPN_IF" >/dev/null 2>&1 || true
-    done
+    ( resolve_domain "$d" ) > "$tmp/$i" 2>/dev/null &
+    pids+=($!)
+    i=$((i + 1))
   done
+  # 只等这些解析子进程，不能裸 wait——zju-connect 也是本脚本的子进程，会永远等下去。
+  for p in "${pids[@]}"; do wait "$p"; done
+
+  i=0
+  for d in "${DOMAINS[@]}"; do
+    while IFS= read -r ip; do
+      [[ -z "$ip" ]] && continue
+      route -n add -host "$ip" -interface "$VPN_IF" >/dev/null 2>&1 || true
+    done < "$tmp/$i"
+    i=$((i + 1))
+  done
+  rm -rf "$tmp"
 }
 
 add_domain_routes
