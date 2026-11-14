@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 mkdir -p "$ROOT/build"
 swiftc -swift-version 5 -o "$ROOT/build/vpnmenu-tests" \
   "$ROOT"/tests/*.swift \
+  "$ROOT"/src/Backends/*.swift \
   "$ROOT"/src/Profile.swift \
   "$ROOT"/src/Process.swift
 "$ROOT/build/vpnmenu-tests"
