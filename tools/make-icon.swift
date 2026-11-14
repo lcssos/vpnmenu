@@ -1,3 +1,6 @@
+// Copyright (C) 2026 lcssos
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import Cocoa
 
 // 生成 VPNMenu 的 App 图标（1024x1024 PNG）

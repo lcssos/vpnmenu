@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright (C) 2026 lcssos
+# SPDX-License-Identifier: AGPL-3.0-only
 # 卸载：停止 VPN、撤销 sudoers 免密规则（App 本身请手动拖到废纸篓）
 set -uo pipefail
 

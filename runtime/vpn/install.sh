@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright (C) 2026 lcssos
+# SPDX-License-Identifier: AGPL-3.0-only
 # 一次性安装（需要 root；App 会在首次连接时用「管理员密码」弹窗调用）
 # 用法: install.sh <vpn目录> <用户名>
 set -euo pipefail
@@ -41,6 +43,9 @@ chmod 755 "$VPN_DIR/zju-connect" \
           "$VPN_DIR/install.sh" \
           "$VPN_DIR/uninstall.sh" 2>/dev/null || true
 chmod 644 "$VPN_DIR/README.md" 2>/dev/null || true
+chmod 644 "$APP_ROOT/Contents/Resources/LICENSE" \
+          "$APP_ROOT/Contents/Resources/THIRD-PARTY-NOTICES.md" 2>/dev/null || true
+chmod 644 "$APP_ROOT/Contents/Resources/licenses/"*.txt 2>/dev/null || true
 # 凭据已改存 macOS 登录钥匙串；清理旧版明文密码文件
 rm -f "$VPN_DIR/.pw"
 # 旧版把服务器/域名写在包内 vpn.conf；现在配置在本机 Application Support，包里不再有

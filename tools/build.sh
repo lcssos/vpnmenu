@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright (C) 2026 lcssos
+# SPDX-License-Identifier: AGPL-3.0-only
 # 从源码组装通用（x86_64 + arm64）VPNMenu.app
 #
 # 源码分布：
@@ -73,6 +75,11 @@ cp "$ASSETS/VPNMenu.icns"            "$PKG/Contents/Resources/VPNMenu.icns"
 cp "$BUILD/VPNMenu"                  "$PKG/Contents/MacOS/VPNMenu"
 cp -R "$RUNTIME"                     "$PKG/Contents/Resources/vpn"
 
+# 许可证与第三方声明要随 App 一起分发（zju-connect 是 AGPL-3.0）
+cp "$ROOT/LICENSE"                   "$PKG/Contents/Resources/LICENSE"
+cp "$ROOT/THIRD-PARTY-NOTICES.md"    "$PKG/Contents/Resources/THIRD-PARTY-NOTICES.md"
+cp -R "$ROOT/licenses"               "$PKG/Contents/Resources/licenses"
+
 # ---------- zju-connect（两种架构合成通用） ----------
 if [[ -f "$VENDOR/zju-connect-darwin-amd64" && -f "$VENDOR/zju-connect-darwin-arm64" ]]; then
   lipo -create "$VENDOR/zju-connect-darwin-amd64" "$VENDOR/zju-connect-darwin-arm64" \
@@ -93,7 +100,10 @@ chmod 755 "$PKG/Contents/MacOS/VPNMenu" \
           "$PKG/Contents/Resources/vpn/zc-dns-restore"
 chmod 644 "$PKG/Contents/Info.plist" \
           "$PKG/Contents/Resources/VPNMenu.icns" \
-          "$PKG/Contents/Resources/vpn/README.md"
+          "$PKG/Contents/Resources/vpn/README.md" \
+          "$PKG/Contents/Resources/LICENSE" \
+          "$PKG/Contents/Resources/THIRD-PARTY-NOTICES.md" \
+          "$PKG/Contents/Resources/licenses/AGPL-3.0.txt"
 
 # ---------- 签名 ----------
 echo "== 签名"

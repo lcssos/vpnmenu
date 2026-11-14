@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright (C) 2026 lcssos
+# SPDX-License-Identifier: AGPL-3.0-only
 # 把 package/VPNMenu.app 部署到 /Applications
 #
 # 用法:

@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright (C) 2026 lcssos
+# SPDX-License-Identifier: AGPL-3.0-only
 # 由 App 通过 sudo -n 以 root 调用（sudoers 只放行本脚本和 zc-vpn-off）
 #
 # 连接参数从 stdin 读入，每行一个 key=value，由 App 从本机配置组装：

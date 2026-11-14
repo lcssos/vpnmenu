@@ -19,6 +19,9 @@ docs/                   旧方案原理笔记（历史文档）
 tools/build.sh          从源码组装通用 App
 tools/deploy.sh         构建并部署到 /Applications
 tools/make-icon.swift   生成 App 图标（1024px PNG → iconset → icns）
+LICENSE                 本项目许可证（AGPL-3.0 全文）
+THIRD-PARTY-NOTICES.md  第三方组件与许可声明（zju-connect 等）
+licenses/               随 App 分发的第三方许可证原文
 ```
 
 产物（不进 git，`tools/build.sh` 生成）：
@@ -46,7 +49,25 @@ Contents/Resources/vpn/
   install.sh             一次性安装：chown root、写 sudoers、清理旧组件
   uninstall.sh           撤销
   README.md              组件说明
+Contents/Resources/licenses/AGPL-3.0.txt        第三方许可证原文
+Contents/Resources/THIRD-PARTY-NOTICES.md       第三方组件声明
 ```
+
+## 关于 zju-connect
+
+VPNMenu 只是一个菜单栏外壳，真正的 EasyConnect 协议实现来自
+[zju-connect](https://github.com/Mythologyli/zju-connect)——一个用 Go 写的第三方开源
+客户端（本项目使用 **v1.3.1**）。
+
+- **用法**：App 以独立进程启动 App 包内的 `zju-connect`，通过 stdin 传连接参数，
+  通过 TUN 接口建立分流隧道；不链接、不修改它的代码。
+- **来源**：`vendor/zju-connect-darwin-{amd64,arm64}` 是从上游 release 下载的官方
+  二进制（这两个文件不进 git），`tools/build.sh` 只用 `lipo` 合并成通用二进制并重新签名。
+- **许可证**：zju-connect 使用 **AGPL-3.0**，详见
+  [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) 与
+  [licenses/AGPL-3.0.txt](licenses/AGPL-3.0.txt)。
+- **声明**：本项目与浙江大学、深信服科技股份有限公司均无隶属关系。zju-connect 是对
+  EasyConnect 协议的独立实现，使用时请自行确认符合所在组织的网络与软件使用规定。
 
 ## 配置与隐私
 
@@ -194,3 +215,15 @@ xattr -dr com.apple.quarantine /Applications/VPNMenu.app
 - **路径不能含空格**：sudoers 的路径匹配不支持空格，`install.sh` 会直接报错。
 - **配置目录不要提交**：`.gitignore` 已加 `profiles/` 与 `*.vpnprofile.json` 兜底，
   提交前仍建议搜一下内网 IP/域名。
+
+## 许可证
+
+本项目以 **AGPL-3.0** 发布，Copyright (C) 2026 lcssos：
+
+- 许可证全文：[LICENSE](LICENSE)
+- 第三方组件（zju-connect v1.3.1，AGPL-3.0）及源码获取方式：
+  [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
+- App 包与分发的 zip 内都带有 `Contents/Resources/licenses/AGPL-3.0.txt` 和
+  `Contents/Resources/THIRD-PARTY-NOTICES.md`
+
+你可以自由使用、修改和再分发；分发修改版时需按 AGPL-3.0 提供对应源码。

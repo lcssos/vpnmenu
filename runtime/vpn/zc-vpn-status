@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright (C) 2026 lcssos
+# SPDX-License-Identifier: AGPL-3.0-only
 # 状态查询（普通用户即可运行）
 PIDFILE=/var/run/zju-connect.pid
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

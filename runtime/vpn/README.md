@@ -12,6 +12,18 @@ App 内所有运行组件都在这个目录，安装后会被 chown 成 root:whe
 | `install.sh` | 一次性安装：权限、sudoers、清理旧版组件 |
 | `uninstall.sh` | 撤销 sudoers 规则并停止 VPN |
 
+## 第三方组件
+
+`zju-connect` 是 [Mythologyli/zju-connect](https://github.com/Mythologyli/zju-connect)
+的官方 v1.3.1 二进制（**AGPL-3.0**）。App 以独立进程方式调用，未修改其代码。
+
+许可证原文与声明随 App 一起分发：
+
+```
+Contents/Resources/licenses/AGPL-3.0.txt
+Contents/Resources/THIRD-PARTY-NOTICES.md
+```
+
 **这个目录里没有服务器地址、域名列表或账号密码。** 连接参数来自本机配置：
 
 ```

@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright (C) 2026 lcssos
+# SPDX-License-Identifier: AGPL-3.0-only
 # 还原被 zju-connect -dns-hijack 改写的系统 DNS（root 运行）
 #
 # 正常断开时 zju-connect 自己会清理；但它在 TUN 重连 panic 时不会执行清理，

@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright (C) 2026 lcssos
+# SPDX-License-Identifier: AGPL-3.0-only
 # 以 root 运行：启动 zju-connect TUN 模式、等待隧道就绪、注入域名路由
 #
 # 连接参数全部来自环境变量（由 zc-vpn-on 解析 App 的 stdin 后传入）。
