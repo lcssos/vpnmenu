@@ -6,8 +6,8 @@ import Cocoa
 // MARK: - 配置菜单
 
 extension AppDelegate {
-    /// 每 2 秒的刷新会调用这里，但只有「目录 mtime 变了 / 第一次扫描 / 距上次扫描
-    /// 超过 60 秒 / 显式 force」时才真正读盘并解码 JSON，避免每 2 秒全量解析配置。
+    /// 每 5 秒的刷新会调用这里，但只有「目录 mtime 变了 / 第一次扫描 / 距上次扫描
+    /// 超过 60 秒 / 显式 force」时才真正读盘并解码 JSON，避免每次轮询全量解析配置。
     func reloadProfiles(force: Bool = false) {
         let now = Date()
         let attrs = try? FileManager.default.attributesOfItem(atPath: ProfileStore.dir.path)

@@ -4,7 +4,7 @@
 import Darwin
 import Foundation
 
-/// 隧道状态检查。状态检查在进程内完成，不再每 2 秒 fork 一个 zc-vpn-status。
+/// 隧道状态检查。状态检查在进程内完成，不再每轮轮询 fork 一个 zc-vpn-status。
 /// pidfile 里是 root 包装脚本 zc-tun.sh 的 PID；`kill(0)` 做存活检查，
 /// `sysctl` 读启动时间识别 PID 复用，`ps` 只在首次见到某个进程实例时校验一次命令行。
 ///

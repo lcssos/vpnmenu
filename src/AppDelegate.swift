@@ -98,9 +98,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+        // 5 秒轮询：状态变化（外部连接/退出、panic 后的 DNS 修复）最长延迟 5 秒。
+        // tolerance 允许系统把这几次唤醒合并到别的定时器上，省电；代价是再多最多 1 秒延迟。
+        timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
             self?.refresh()
         }
+        timer?.tolerance = 1.0
 
         // 只有一个配置时，启动后自动连接（登录自启的常见场景）。
         // 等一次轮询稳定后再做，避免和启动时的状态检查抢。
