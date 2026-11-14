@@ -38,7 +38,9 @@ BUILD="$ROOT/build"
 RUNTIME="$ROOT/runtime/vpn"
 VENDOR="$ROOT/vendor"
 ASSETS="$ROOT/assets"
-SOURCES=("$ROOT"/src/*.swift)
+SOURCES=()
+while IFS= read -r f; do SOURCES+=("$f"); done \
+  < <(find "$ROOT/src" -name '*.swift' -type f | sort)
 
 mkdir -p "$BUILD" "$ASSETS"
 

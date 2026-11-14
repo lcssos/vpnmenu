@@ -113,11 +113,10 @@ sudoers 组件已安装，且当前没有活动隧道。缺凭据或未安装时
 ```
 src/main.swift          入口（CLI 辅助模式、单实例锁、启动菜单栏 App）
 src/AppDelegate*.swift  菜单栏界面与业务（状态、连接/断开、配置、钥匙串、安装、退出）
+src/Backends/           后端协议、注册表、通用 pidfile/ready 探针、zju-connect 实现
 src/Profile.swift       配置模型、校验与本地存储
-src/Keychain.swift      钥匙串凭据与连接参数编码
-src/VPNMonitor.swift    隧道进程/就绪/DNS 状态检查
+src/Keychain.swift      钥匙串凭据
 src/Process.swift       外部命令执行
-src/Paths.swift         组件与运行期文件路径
 src/CommandLineTool.swift  命令行辅助模式
 src/SingleInstance.swift   单实例锁
 src/Info.plist          bundle 元信息（LSUIElement=true，CFBundleIconFile=VPNMenu）
@@ -163,6 +162,18 @@ Contents/Resources/vpn/
 Contents/Resources/licenses/AGPL-3.0.txt        第三方许可证原文
 Contents/Resources/THIRD-PARTY-NOTICES.md       第三方组件声明
 ```
+
+### 新增 VPN 后端
+
+菜单、状态机、配置菜单和钥匙串都与具体后端无关。接入另一个「用户名密码 + TUN」类
+后端时：
+
+1. 在 `src/Backends/` 新建实现 `VPNBackend` 的文件，并注册到 `BackendRegistry.all`
+2. 准备该后端的运行脚本目录，让 `tools/build.sh` 一起拷贝进 App 包
+3. 配置 JSON 写 `"backend": "<id>"`；不写时视为 `zju-connect`
+
+`AppDelegate.swift` 及其扩展不需要修改。状态检测复用 `ProcessFileProbe`（pidfile +
+就绪标记）；如果新后端的就绪语义不同，在实现里自行判断即可。
 
 ## 关于 zju-connect
 

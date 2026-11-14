@@ -4,8 +4,8 @@
 // 入口：命令行辅助模式 → 单实例锁 → 菜单栏 App。
 // 其它源码按职责拆分：
 //   AppDelegate.swift / AppDelegate+*.swift   界面与业务
+//   Backends/                                 后端协议、注册表、zju-connect 实现
 //   Profile.swift / Keychain.swift            配置与凭据
-//   VPNMonitor.swift / Paths.swift            隧道状态与路径
 //   Process.swift / Logging.swift             子进程与日志
 //   CommandLineTool.swift / SingleInstance.swift
 

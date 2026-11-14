@@ -61,19 +61,3 @@ func loadCredential(for profileID: String) -> (user: String, pass: String)? {
     }
     return legacy
 }
-
-/// 通过 stdin 交给 root 脚本的 key=value 协议；脚本只做白名单解析，绝不 source 配置文件。
-func connectionPayload(_ p: Profile, _ c: (user: String, pass: String)) -> String {
-    var lines = [
-        "ACCOUNT=\(c.user)",
-        "PASSWORD=\(c.pass)",
-        "SERVER=\(p.server)",
-        "PORT=\(p.portValue)",
-    ]
-    if let v = p.tunInterface, !v.isEmpty { lines.append("TUN_IF=\(v)") }
-    if let v = p.socksBind, !v.isEmpty { lines.append("SOCKS_BIND=\(v)") }
-    if let v = p.httpBind, !v.isEmpty { lines.append("HTTP_BIND=\(v)") }
-    for d in p.domainList { lines.append("DOMAIN=\(d)") }
-    for d in p.proxyDomainList { lines.append("PROXY_DOMAIN=\(d)") }
-    return lines.joined(separator: "\n") + "\n"
-}
