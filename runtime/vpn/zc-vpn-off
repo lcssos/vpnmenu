@@ -5,15 +5,23 @@ PIDFILE=/var/run/zju-connect.pid
 
 if [[ -f "$PIDFILE" ]]; then
   PID=$(cat "$PIDFILE")
-  /bin/kill "$PID" 2>/dev/null
-  for _ in $(seq 1 20); do
-    /bin/kill -0 "$PID" 2>/dev/null || break
-    sleep 0.5
-  done
-  /bin/kill -9 "$PID" 2>/dev/null
+  # pidfile 里是 zc-tun.sh 包装脚本的 pid；崩溃后 PID 可能被系统复用，先确认再杀
+  if ps -p "$PID" -o command= 2>/dev/null | grep -qF "$DIR/zc-tun.sh"; then
+    /bin/kill "$PID" 2>/dev/null
+    for _ in $(seq 1 20); do
+      /bin/kill -0 "$PID" 2>/dev/null || break
+      sleep 0.5
+    done
+    /bin/kill -9 "$PID" 2>/dev/null
+  fi
   rm -f "$PIDFILE"
 fi
 
 # 兜底：清掉可能残留的进程（只匹配本 App 内的二进制）
 pkill -f "$DIR/zju-connect" 2>/dev/null
+
+# 上次 panic / 强杀可能留下 VPN 内网 DNS（2.0.1.x），这里按快照还原；
+# 没有残留时是一次无副作用的检查。
+/bin/bash "$DIR/zc-dns-restore" >/dev/null 2>&1 || true
+
 echo "stopped"

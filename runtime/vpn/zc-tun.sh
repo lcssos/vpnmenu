@@ -53,6 +53,20 @@ if [[ ${#PROXY_DOMAINS[@]} -gt 0 ]]; then
   done
 fi
 
+# -dns-hijack 会把各网络服务的 DNS 改成 VPN 内网地址，而 zju-connect 在 panic 时
+# 不会执行自己的清理。启动前先记下原始 DNS，异常退出后由 zc-dns-restore 按快照还原。
+DNS_SNAPSHOT=/var/run/zju-connect.dns
+: > "$DNS_SNAPSHOT" 2>/dev/null || true
+while IFS= read -r svc; do
+  [[ -z "$svc" ]] && continue
+  cur=$(networksetup -getdnsservers "$svc" 2>/dev/null \
+    | grep -E '^[0-9]+(\.[0-9]+){3}$' | tr '\n' ' ' | sed 's/ *$//')
+  # 上一次崩溃可能留下 2.0.1.x，这种“原值”等同于自动获取
+  [[ "$cur" =~ 2\.0\.1\.[0-9]+ ]] && cur=""
+  printf '%s\t%s\n' "$svc" "$cur" >> "$DNS_SNAPSHOT"
+done < <(networksetup -listallnetworkservices 2>/dev/null | tail -n +2 | sed 's/^\*//')
+chmod 644 "$DNS_SNAPSHOT" 2>/dev/null || true
+
 "$DIR/zju-connect" -server "$VPN_SERVER" -port "$VPN_PORT" -username "$VPN_ACCOUNT" \
   -disable-zju-config -remote-dns-server auto \
   ${EXTRA[@]+"${EXTRA[@]}"} \
@@ -64,6 +78,8 @@ cleanup() {
   /bin/kill "$VPN_PID" 2>/dev/null
   wait "$VPN_PID" 2>/dev/null
   rm -f "$PIDFILE"
+  # 正常退出时 zju-connect 已自己清过 DNS，这一步是 panic/强杀时的兜底
+  /bin/bash "$DIR/zc-dns-restore" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 trap 'exit 0' TERM INT
@@ -107,8 +123,12 @@ add_domain_routes() {
 
 add_domain_routes
 
-# 每 5 分钟刷新一次，应对 DNS 轮换 / 路由失效
+# 每 5 分钟刷新一次，应对 DNS 轮换 / 路由失效；同时每 5 秒确认 zju-connect 还活着。
+# 不用后台刷新子进程：那样父脚本被 kill -9 时会留下孤儿，TERM 也可能被 sleep 推迟。
 while /bin/kill -0 "$VPN_PID" 2>/dev/null; do
-  sleep 300
+  for _ in $(seq 1 60); do
+    /bin/kill -0 "$VPN_PID" 2>/dev/null || break 2
+    sleep 5
+  done
   add_domain_routes
 done

@@ -41,7 +41,8 @@ Contents/Resources/vpn/
   zju-connect            通用二进制（x86_64 + arm64）
   zc-tun.sh              启动 TUN、等就绪、注入域名 /32 路由
   zc-vpn-on / -off       启停入口（sudoers 只放行这两个）
-  zc-vpn-status          状态查询
+  zc-vpn-status          状态查询（残留 VPN DNS 时输出 dns=stale）
+  zc-dns-restore         按快照还原被 dns-hijack 改写的系统 DNS（崩溃兜底）
   install.sh             一次性安装：chown root、写 sudoers、清理旧组件
   uninstall.sh           撤销
   README.md              组件说明
@@ -131,7 +132,8 @@ $APP --vpn-on
 ## 构建
 
 ```bash
-~/opt/vpnmenu/tools/build.sh
+~/opt/vpnmenu/tools/build.sh           # 只组装 package/VPNMenu.app
+~/opt/vpnmenu/tools/build.sh --dist    # 同时打包 dist/VPNMenu.zip
 ```
 
 脚本会分别交叉编译 x86_64 与 arm64，再用 `lipo` 合成通用二进制，并重新签名。
@@ -161,8 +163,11 @@ tools/deploy.sh --build    # 先构建再部署
 ## 分发
 
 ```bash
-ditto -c -k --sequesterRsrc --keepParent package/VPNMenu.app dist/VPNMenu.zip
+~/opt/vpnmenu/tools/build.sh --dist
 ```
+
+等价于构建后手动执行
+`ditto -c -k --sequesterRsrc --keepParent package/VPNMenu.app dist/VPNMenu.zip`。
 
 另一台 Mac：解压 → 拖到 `/Applications` → 打开 → 导入配置 → 录入账号 →
 首次连接时输入管理员密码。如提示「无法验证开发者」（AirDrop/下载带 quarantine）：

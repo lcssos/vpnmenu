@@ -1,11 +1,22 @@
 #!/bin/bash
 # 状态查询（普通用户即可运行）
 PIDFILE=/var/run/zju-connect.pid
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# 注意：普通用户对 root 进程执行 kill -0 会返回 EPERM，必须用 ps 判断
-if [[ -f "$PIDFILE" ]] && ps -p "$(cat "$PIDFILE")" >/dev/null 2>&1; then
+# 注意：普通用户对 root 进程执行 kill -0 会返回 EPERM，必须用 ps 判断。
+# pidfile 里是 zc-tun.sh 包装脚本的 pid（它负责看护 zju-connect），
+# 同时校验命令行，避免残留 pidfile 指向被系统复用的其它进程。
+if [[ -f "$PIDFILE" ]] && ps -p "$(cat "$PIDFILE")" -o command= 2>/dev/null \
+     | grep -qF "$DIR/zc-tun.sh"; then
   echo "connected"
   exit 0
 fi
+
 echo "disconnected"
+
+# zju-connect 在 panic 时不会还原 -dns-hijack 改写的 DNS（会留下 2.0.1.x），
+# 这里给出信号，App 收到后用 zc-vpn-off 做兜底清理。
+if grep -qE '^nameserver[[:space:]]+2\.0\.1\.[0-9]+' /etc/resolv.conf 2>/dev/null; then
+  echo "dns=stale"
+fi
 exit 1

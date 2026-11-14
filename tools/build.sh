@@ -8,7 +8,25 @@
 #   assets/                           图标产物（缺失时会自动生成）
 # 产物：
 #   package/VPNMenu.app               可直接分发/安装的 App
+#   dist/VPNMenu.zip                  加 --dist 时额外打包的分发压缩包
+#
+# 用法：
+#   tools/build.sh          只组装 App
+#   tools/build.sh --dist   组装 App 并打包 dist/VPNMenu.zip
 set -euo pipefail
+
+DO_DIST=no
+for arg in "$@"; do
+  case "$arg" in
+    --dist) DO_DIST=yes ;;
+    -h|--help)
+      sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'
+      exit 0 ;;
+    *)
+      echo "未知参数: ${arg}（可用: --dist）" >&2
+      exit 2 ;;
+  esac
+done
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PKG="$ROOT/package/VPNMenu.app"
@@ -71,7 +89,8 @@ chmod 755 "$PKG/Contents/MacOS/VPNMenu" \
           "$PKG/Contents/Resources/vpn/zc-tun.sh" \
           "$PKG/Contents/Resources/vpn/zc-vpn-on" \
           "$PKG/Contents/Resources/vpn/zc-vpn-off" \
-          "$PKG/Contents/Resources/vpn/zc-vpn-status"
+          "$PKG/Contents/Resources/vpn/zc-vpn-status" \
+          "$PKG/Contents/Resources/vpn/zc-dns-restore"
 chmod 644 "$PKG/Contents/Info.plist" \
           "$PKG/Contents/Resources/VPNMenu.icns" \
           "$PKG/Contents/Resources/vpn/README.md"
@@ -85,4 +104,16 @@ codesign --verify --deep --strict "$PKG" && echo "signature ok"
 echo "== 架构"
 lipo -archs "$PKG/Contents/MacOS/VPNMenu"
 lipo -archs "$PKG/Contents/Resources/vpn/zju-connect"
+
+# ---------- 分发压缩包 ----------
+if [[ "$DO_DIST" == "yes" ]]; then
+  DIST="$ROOT/dist"
+  ZIP="$DIST/VPNMenu.zip"
+  echo "== 打包 $ZIP"
+  mkdir -p "$DIST"
+  rm -f "$ZIP"
+  ditto -c -k --sequesterRsrc --keepParent "$PKG" "$ZIP"
+  ls -lh "$ZIP"
+fi
+
 echo "== 完成: $PKG"

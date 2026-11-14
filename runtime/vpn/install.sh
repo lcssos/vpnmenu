@@ -37,6 +37,7 @@ chmod 755 "$VPN_DIR/zju-connect" \
           "$VPN_DIR/zc-vpn-on" \
           "$VPN_DIR/zc-vpn-off" \
           "$VPN_DIR/zc-vpn-status" \
+          "$VPN_DIR/zc-dns-restore" \
           "$VPN_DIR/install.sh" \
           "$VPN_DIR/uninstall.sh" 2>/dev/null || true
 chmod 644 "$VPN_DIR/README.md" 2>/dev/null || true

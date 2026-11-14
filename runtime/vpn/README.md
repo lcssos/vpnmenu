@@ -7,7 +7,8 @@ App 内所有运行组件都在这个目录，安装后会被 chown 成 root:whe
 | `zju-connect` | 通用二进制（x86_64 + arm64），替代 EasyConnect 客户端 |
 | `zc-tun.sh` | 启动 TUN、等隧道就绪、注入域名 /32 路由（root） |
 | `zc-vpn-on` / `zc-vpn-off` | 启停入口，sudoers 只放行这两个 |
-| `zc-vpn-status` | 状态查询（普通用户可跑） |
+| `zc-vpn-status` | 状态查询（普通用户可跑）；发现残留 VPN DNS 时额外输出 `dns=stale` |
+| `zc-dns-restore` | 按启动前快照还原被 `-dns-hijack` 改写的系统 DNS（root，崩溃兜底） |
 | `install.sh` | 一次性安装：权限、sudoers、清理旧版组件 |
 | `uninstall.sh` | 撤销 sudoers 规则并停止 VPN |
 
@@ -21,6 +22,19 @@ macOS 登录钥匙串（com.lcssos.vpnmenu.credential.<uuid>）      # 账号密
 App 解析配置后，把参数以 `key=value` 形式通过 **stdin** 交给 `zc-vpn-on`；它只按白名单
 取值并做格式校验（hostname、端口、utun 名、监听地址），然后把值放进环境变量交给
 `zc-tun.sh`。root 侧从不 `source`/`eval` 用户可写的文件，避免把配置目录变成提权入口。
+
+## 隧道异常退出后的 DNS 还原
+
+`-dns-hijack` 会把各网络服务的 DNS 改成 VPN 内网地址（`2.0.1.x`）。zju-connect 正常
+退出时会自己还原，但它在 TUN 重连时 `panic`，那条路径不会执行清理——系统 DNS 会一直
+指向已经不可达的内网地址，整机域名解析失效。
+
+所以启动前 `zc-tun.sh` 会把各服务原始 DNS 记到 `/var/run/zju-connect.dns`，以下三条
+路径都会调用 `zc-dns-restore` 按快照还原（只动仍指向 `2.0.1.x` 或被清空的服务）：
+
+1. `zc-tun.sh` 的 EXIT 清理（每 5 秒检查子进程，panic 后最多 5 秒触发）；
+2. `zc-vpn-off`（覆盖 `kill -9` / 手动清理）；
+3. App 轮询到 `zc-vpn-status` 输出 `dns=stale` 时自动调用 `zc-vpn-off`。
 
 ## 安装时发生了什么
 

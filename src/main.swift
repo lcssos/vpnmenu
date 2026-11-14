@@ -253,10 +253,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var reinstallItem: NSMenuItem!
     private var timer: Timer?
     private var animTimer: Timer?
-    private var spinAngle: CGFloat = 0
-    private var spinnerBase: NSImage?
+    private var busyFrames: [NSImage] = []
+    private var busyFrameIndex = 0
     private var busy = false
     private var lastIconLog = ""
+    private var lastDNSRepair = Date.distantPast
 
     // 配置（只从本机目录读取）
     private var profileMenuItem: NSMenuItem!
@@ -527,8 +528,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refresh() {
         reloadProfiles()
-        let (code, _) = run(statusPath, [])
+        let (code, out) = run(statusPath, [])
         let connected = (code == 0)
+        if !connected && out.contains("dns=stale") { repairStaleDNS() }
         connectItem.isEnabled = !connected && !busy
         disconnectItem.isEnabled = connected && !busy
         reinstallItem.isEnabled = !busy
@@ -542,6 +544,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             statusLine.title = "VPN：未连接"
         }
         setIcon(connected: connected)
+    }
+
+    /// zju-connect 在 panic 时不会还原被 -dns-hijack 改写的系统 DNS（留在 2.0.1.x），
+    /// 整机域名解析都会失效。调用 zc-vpn-off（sudoers 已放行）按启动前快照兜底还原。
+    private func repairStaleDNS() {
+        guard !busy, Date().timeIntervalSince(lastDNSRepair) > 30 else { return }
+        lastDNSRepair = Date()
+        DispatchQueue.global().async {
+            _ = run("/usr/bin/sudo", ["-n", self.offPath])
+        }
     }
 
     private func setIcon(connected: Bool) {
@@ -735,7 +747,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// 进入「操作进行中」状态：提示文字 + 图标慢速闪烁
+    /// 进入「操作进行中」状态：提示文字 + 图标在实心/空心锁之间切换
     private func beginBusy(_ title: String) {
         busy = true
         statusLine.title = title
@@ -748,45 +760,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startBusyAnimation() {
         guard animTimer == nil else { return }
         let color = iconColor(dark: menuBarIsDark())
-        spinnerBase = tintedSymbol("arrow.triangle.2.circlepath", color: color)
-            ?? tintedSymbol("arrow.clockwise", color: color)
-        spinAngle = 0
-        applySpin()
-        // .common 模式：打开菜单、弹窗时也能继续转
-        let t = Timer(timeInterval: 0.06, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            self.spinAngle += .pi / 10  // 每帧 18°
-            if self.spinAngle >= 2 * .pi { self.spinAngle -= 2 * .pi }
-            self.applySpin()
+        guard let hollow = tintedSymbol("lock.shield", color: color),
+              let filled = tintedSymbol("lock.shield.fill", color: color) else { return }
+
+        // 先显示与当前状态相反的那一个，点下去立刻有反馈
+        let connectedNow = run(statusPath, []).0 == 0
+        let ordered = connectedNow ? [hollow, filled] : [filled, hollow]
+
+        // 两个符号的包围盒可能差零点几像素；统一画布，切换时菜单栏图标不会左右跳
+        let canvas = NSSize(width: max(hollow.size.width, filled.size.width),
+                            height: max(hollow.size.height, filled.size.height))
+        busyFrames = ordered.map { centered($0, in: canvas) }
+        busyFrameIndex = 0
+        applyBusyFrame()
+
+        // .common 模式：打开菜单、弹窗时也能继续切
+        let t = Timer(timeInterval: 0.7, repeats: true) { [weak self] _ in
+            guard let self, !self.busyFrames.isEmpty else { return }
+            self.busyFrameIndex = (self.busyFrameIndex + 1) % self.busyFrames.count
+            self.applyBusyFrame()
         }
         RunLoop.main.add(t, forMode: .common)
         animTimer = t
     }
 
-    private func applySpin() {
-        guard let base = spinnerBase, let button = item.button else { return }
-        button.image = rotated(base, angle: spinAngle)
-        button.needsDisplay = true
-    }
-
-    /// 把已着色的图标旋转指定角度；略微内缩，避免转起来时四角被裁掉
-    private func rotated(_ image: NSImage, angle: CGFloat) -> NSImage {
-        let size = image.size
-        return NSImage(size: size, flipped: false) { rect in
-            guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
-            ctx.translateBy(x: rect.midX, y: rect.midY)
-            ctx.rotate(by: angle)
-            ctx.translateBy(x: -rect.midX, y: -rect.midY)
-            let inset = rect.insetBy(dx: rect.width * 0.08, dy: rect.height * 0.08)
-            image.draw(in: inset)
+    private func centered(_ image: NSImage, in size: NSSize) -> NSImage {
+        NSImage(size: size, flipped: false) { rect in
+            let x = (rect.width - image.size.width) / 2
+            let y = (rect.height - image.size.height) / 2
+            image.draw(in: NSRect(x: x, y: y, width: image.size.width, height: image.size.height))
             return true
         }
+    }
+
+    private func applyBusyFrame() {
+        guard busyFrames.indices.contains(busyFrameIndex), let button = item.button else { return }
+        button.image = busyFrames[busyFrameIndex]
+        button.needsDisplay = true
     }
 
     private func stopBusyAnimation() {
         animTimer?.invalidate()
         animTimer = nil
-        spinnerBase = nil
+        busyFrames = []
+        busyFrameIndex = 0
         item.button?.alphaValue = 1.0
     }
 

@@ -1,0 +1,61 @@
+#!/bin/bash
+# 还原被 zju-connect -dns-hijack 改写的系统 DNS（root 运行）
+#
+# 正常断开时 zju-connect 自己会清理；但它在 TUN 重连 panic 时不会执行清理，
+# 系统 DNS 会留在 2.0.1.x（隧道已死、不可达），导致整机域名解析失效。
+# 本脚本按 zc-tun.sh 启动前保存的快照恢复；没有快照时只把仍指向
+# 2.0.1.x 的服务设回「自动」。
+set -uo pipefail
+
+SNAPSHOT=/var/run/zju-connect.dns
+
+is_vpn_dns() { [[ "$1" =~ 2\.0\.1\.[0-9]+ ]]; }
+
+current_dns() {
+  networksetup -getdnsservers "$1" 2>/dev/null \
+    | grep -E '^[0-9]+(\.[0-9]+){3}$' | tr '\n' ' ' | sed 's/ *$//'
+}
+
+set_dns() {
+  local svc="$1" want="$2"
+  if [[ -z "$want" ]]; then
+    networksetup -setdnsservers "$svc" Empty >/dev/null 2>&1 || true
+  else
+    # shellcheck disable=SC2086
+    networksetup -setdnsservers "$svc" $want >/dev/null 2>&1 || true
+  fi
+}
+
+changed=no
+
+if [[ -f "$SNAPSHOT" ]]; then
+  while IFS=$'\t' read -r svc want; do
+    [[ -z "$svc" ]] && continue
+    cur="$(current_dns "$svc")"
+    [[ "$cur" == "$want" ]] && continue
+    # 只在「仍是 VPN DNS」或「被 zju-connect 清空」时恢复，避免覆盖用户会话中的手动修改
+    if is_vpn_dns "$cur" || [[ -z "$cur" && -n "$want" ]]; then
+      set_dns "$svc" "$want"
+      changed=yes
+    fi
+  done < "$SNAPSHOT"
+  rm -f "$SNAPSHOT"
+else
+  while IFS= read -r svc; do
+    [[ -z "$svc" ]] && continue
+    cur="$(current_dns "$svc")"
+    if is_vpn_dns "$cur"; then
+      set_dns "$svc" ""
+      changed=yes
+    fi
+  done < <(networksetup -listallnetworkservices 2>/dev/null | tail -n +2 | sed 's/^\*//')
+fi
+
+if [[ "$changed" == yes ]]; then
+  dscacheutil -flushcache 2>/dev/null || true
+  killall -HUP mDNSResponder 2>/dev/null || true
+  echo "dns restored"
+else
+  echo "dns unchanged"
+fi
+exit 0
