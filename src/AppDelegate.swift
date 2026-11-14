@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var cancelWait = false     // 用户主动断开，抑制“连接失败”提示
     var quitting = false       // 正在断开并退出
     var lastIconLog = ""
+    var tunnelBackend: VPNBackend?
 
     let monitor = VPNMonitor()
 
@@ -123,14 +124,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func refresh() {
         reloadProfiles()
-        let pid = monitor.alivePID()
-        let processAlive = pid != nil
-        let ready = pid.map { monitor.tunnelReady($0) } ?? false
-        let connected = processAlive && ready
-        // DNS 兜底只在完全没有包装脚本时做；连接中 / 已连接都不能碰
-        if !processAlive && monitor.hasStaleDNS() && !busy {
-            monitor.repairStaleDNS()
+        let live = BackendRegistry.live()
+        let processAlive = live != nil
+        let connected = live?.status.ready ?? false
+        // 残留状态修复只在完全没有隧道时做；连接中 / 已连接都不能碰
+        if !processAlive {
+            BackendRegistry.repairStaleStatesIfIdle(busy: busy)
         }
+        if !processAlive && !busy && !waitingReady { tunnelBackend = nil }
         connectItem.isEnabled = !processAlive && !busy
         // 启动等待期间也允许断开：隧道迟迟不就绪时用户要能取消
         disconnectItem.isEnabled = processAlive && (!busy || waitingReady)
@@ -152,4 +153,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             setIcon(connected: false)
         }
     }
+
+    // MARK: - 后端选择
+
+    func selectedBackend() -> VPNBackend? {
+        guard let id = selectedID,
+              let hit = profiles.first(where: { $0.id == id }) else { return nil }
+        return BackendRegistry.backend(for: hit.profile)
+    }
+
+    /// 当前实际要操作的后端：存活隧道 > 连接在飞 > 选中配置 > 第一个注册后端。
+    func currentTunnelBackend() -> VPNBackend {
+        BackendRegistry.resolve(alive: BackendRegistry.live()?.backend,
+                                pending: tunnelBackend,
+                                selected: selectedBackend(),
+                                registered: BackendRegistry.all)!
+    }
+
+    func isConnected() -> Bool { BackendRegistry.live() != nil }
 }

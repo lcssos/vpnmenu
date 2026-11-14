@@ -89,7 +89,7 @@ extension AppDelegate {
         guard let id = sender.representedObject as? String, id != selectedID else { return }
         guard let target = profiles.first(where: { $0.id == id }) else { return }
 
-        let connected = monitor.alivePID() != nil
+        let connected = isConnected()
         if connected {
             let a = NSAlert()
             a.messageText = "切换到「\(target.profile.name)」？"
@@ -136,7 +136,7 @@ extension AppDelegate {
             return
         }
         let name = ProfileStore.list().first(where: { $0.id == id })?.profile.name ?? "新配置"
-        let connected = monitor.alivePID() != nil
+        let connected = isConnected()
         if connected {
             // 不悄悄切走正在使用的配置；断开后再让用户选择
             alert("导入成功", "配置「\(name)」已导入。当前连接仍使用原配置；断开后可在「配置」里切换。")
