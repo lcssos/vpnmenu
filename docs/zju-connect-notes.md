@@ -1,4 +1,4 @@
-> **历史文档**：这是 2026-11 早期版本（组件散落在 `/usr/local`、`~/opt/zju-connect`）的
+> **历史文档**：这是 2026-11 早期版本（组件散落在 `/usr/local` 和旧版本的本地目录）的
 > 原理笔记，部分路径已不适用。当前实现全部收在 `/Applications/VPNMenu.app` 内，
 > 见仓库根目录的 `README.md`。
 
@@ -23,7 +23,7 @@
 ```bash
 # 先退出 EasyConnect，避免 utun/路由冲突
 osascript -e 'tell application "EasyConnect" to quit'
-sudo ~/opt/zju-connect/zc-tun.sh >> ~/opt/zju-connect/zc-tun.log 2>&1 &
+sudo /path/to/zju-connect/zc-tun.sh >> /path/to/zju-connect/zc-tun.log 2>&1 &
 ```
 
 启动后：
@@ -37,7 +37,7 @@ sudo ~/opt/zju-connect/zc-tun.sh >> ~/opt/zju-connect/zc-tun.log 2>&1 &
 ## 停止
 
 ```bash
-sudo ~/opt/zju-connect/zc-tun-stop.sh
+sudo /path/to/zju-connect/zc-tun-stop.sh
 ```
 
 ## 为什么需要额外注入域名路由
@@ -136,7 +136,7 @@ App 本身不持 root，只调用已安装的 root 脚本：
 /etc/sudoers.d/zc-vpn   # 只放行 zc-vpn-on / zc-vpn-off，不用输密码
 ```
 
-安装/重装这些 root 组件：`sudo bash ~/opt/zju-connect/staging/install-root.sh`
+安装/重装这些 root 组件：`sudo bash /path/to/zju-connect/staging/install-root.sh`
 
 > 注意：`zc-vpn-status` 普通用户判断 root 进程不能用 `kill -0`（返回 EPERM），
 > 必须用 `ps -p <pid>`，脚本里已按此实现。
