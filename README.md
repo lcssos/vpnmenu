@@ -286,9 +286,11 @@ $APP --vpn-on
 
 ## 构建
 
+在仓库根目录执行：
+
 ```bash
-~/opt/vpnmenu/tools/build.sh           # 只组装 package/VPNMenu.app
-~/opt/vpnmenu/tools/build.sh --dist    # 同时打包 dist/VPNMenu-<版本>.zip 和 .dmg
+tools/build.sh           # 只组装 package/VPNMenu.app
+tools/build.sh --dist    # 同时打包 dist/VPNMenu-<版本>.zip 和 .dmg
 ```
 
 脚本会分别交叉编译 x86_64 与 arm64，再用 `lipo` 合成通用二进制，并重新签名。
@@ -317,8 +319,10 @@ tools/deploy.sh --build    # 先构建再部署
 
 ## 分发
 
+在仓库根目录执行：
+
 ```bash
-~/opt/vpnmenu/tools/build.sh --dist
+tools/build.sh --dist
 ```
 
 产物在 `dist/`：
