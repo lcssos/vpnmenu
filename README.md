@@ -34,6 +34,8 @@ macOS 菜单栏 VPN 开关 · 用 zju-connect 替代 EasyConnect 客户端
 - **凭据不落盘**：账号密码存登录钥匙串，通过 stdin 交给 root 脚本；密码不落盘、不进 `ps`
   （用户名会作为 zju-connect 的 `-username` 参数出现在进程列表里）。
 - **多配置**：导入 / 导出 JSON，已连接时切换会自动重连。
+- **实现可切换**：系统 DNS 和多线路选线默认由 App 内的脚本完成（连接更快）；配置里把
+  `dnsMode` / `multiLine` 设为 `zju` 可切回 zju-connect 的实现。
 - **崩溃兜底**：系统 DNS 由启动脚本按需接管（只改有 IP 的网络服务），异常退出后按快照还原。
 - **轻量常驻**：稳态下只做 `kill(0)` 检查，不 fork 子进程；配置变化时才重新解析。
 - **通用二进制**：同一份 App 在 Intel 与 Apple Silicon 上原生运行，无需 Rosetta。
@@ -219,15 +221,16 @@ VPNMenu 只是一个菜单栏外壳，真正的 EasyConnect 协议实现来自
 }
 ```
 
-字段说明：
+字段说明（`dnsMode` / `multiLine` 是**实现开关**，默认都走 App 内脚本；其余是网络参数）：
 
+- `dnsMode`（实现开关）：系统 DNS 由谁实现。`script`（默认）由 `zc-tun.sh` 只改当前有
+  IP 的网络服务；`zju` 用 zju-connect 的 `-dns-hijack`（启动时串行改所有服务，多等约
+  10 秒）。
+- `multiLine`（实现开关）：`script`（默认）不做线路 ping 测速，直接连配置的服务器；
+  `zju` 由 zju-connect 登录后自动 ping 各线路选最优（多等约 2 秒）。
 - `domains`：需要走隧道、且服务端 rclist 未下发 IP 的域名。连接后脚本用内网 DNS 解析，
   把结果注入 `/32` 路由；每 5 分钟刷新。
 - `proxyDomains`：需要额外传给 zju-connect `-custom-proxy-domain` 的域名。
-- `dnsMode`：系统 DNS 由谁实现。`script`（默认）由 `zc-tun.sh` 只改当前有 IP 的网络
-  服务；`zju` 用 zju-connect 的 `-dns-hijack`（启动时串行改所有服务，多等约 10 秒）。
-- `multiLine`：`script`（默认）不做线路 ping 测速，直接连配置的服务器；`zju` 由
-  zju-connect 登录后自动 ping 各线路选最优（多等约 2 秒）。
 - `tunInterface` / `socksBind` / `httpBind` / `port` 可省略，默认 `utun4` /
   `127.0.0.1:1090` / `127.0.0.1:1091` / `4430`。
 
