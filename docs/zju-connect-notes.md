@@ -1,6 +1,6 @@
 > **历史文档**：这是 2026-11 早期版本（组件散落在 `/usr/local`、`~/opt/zju-connect`）的
 > 原理笔记，部分路径已不适用。当前实现全部收在 `/Applications/VPNMenu.app` 内，
-> 见 `~/opt/vpnmenu/README.md`。
+> 见仓库根目录的 `README.md`。
 
 # zju-connect on this Mac
 
@@ -23,7 +23,7 @@
 ```bash
 # 先退出 EasyConnect，避免 utun/路由冲突
 osascript -e 'tell application "EasyConnect" to quit'
-sudo /Users/lcssos/opt/zju-connect/zc-tun.sh >> /Users/lcssos/opt/zju-connect/zc-tun.log 2>&1 &
+sudo ~/opt/zju-connect/zc-tun.sh >> ~/opt/zju-connect/zc-tun.log 2>&1 &
 ```
 
 启动后：
@@ -37,7 +37,7 @@ sudo /Users/lcssos/opt/zju-connect/zc-tun.sh >> /Users/lcssos/opt/zju-connect/zc
 ## 停止
 
 ```bash
-sudo /Users/lcssos/opt/zju-connect/zc-tun-stop.sh
+sudo ~/opt/zju-connect/zc-tun-stop.sh
 ```
 
 ## 为什么需要额外注入域名路由
@@ -89,10 +89,10 @@ App 位置与自启动：
 ~/Library/LaunchAgents/com.lcssos.vpnmenu.plist   # 登录自动启动
 ```
 
-源码在 `~/opt/vpnmenu/src/`（`*.swift` + `Info.plist`），重新编译安装：
+源码在仓库的 `src/`（`*.swift` + `Info.plist`），重新编译安装：
 
 ```bash
-cd ~/opt/vpnmenu
+cd /path/to/vpnmenu
 swiftc -O -swift-version 5 -framework Cocoa -o VPNMenu.app/Contents/MacOS/VPNMenu src/*.swift
 codesign --force --sign - --timestamp=none VPNMenu.app
 rm -rf ~/Applications/VPNMenu.app && cp -R VPNMenu.app ~/Applications/
@@ -106,13 +106,13 @@ launchctl kickstart -k gui/$(id -u)/com.lcssos.vpnmenu
 
 图标是脚本画的（圆角方形蓝渐变 + 白色盾牌），不是手工图片：
 
-- 生成脚本：`~/opt/vpnmenu/tools/make-icon.swift`
-- 产物：`~/opt/vpnmenu/assets/icon-1024.png` → `assets/VPNMenu.icns`
+- 生成脚本：`tools/make-icon.swift`
+- 产物：`assets/icon-1024.png` → `assets/VPNMenu.icns`
 
 重新生成并装进 App：
 
 ```bash
-cd ~/opt/vpnmenu/tools
+cd tools          # 在仓库根目录
 swiftc -O -swift-version 5 -framework Cocoa -o make-icon make-icon.swift
 ./make-icon ../assets/icon-1024.png
 # 生成 iconset（16/32/64/128/256/512/1024）
