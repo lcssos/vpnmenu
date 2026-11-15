@@ -5,10 +5,10 @@ App 内所有运行组件都在这个目录，安装后会被 chown 成 root:whe
 | 文件 | 作用 |
 |---|---|
 | `zju-connect` | 通用二进制（x86_64 + arm64），替代 EasyConnect 客户端 |
-| `zc-tun.sh` | 启动 TUN、等隧道就绪、写就绪标记、注入域名 /32 路由（root） |
+| `zc-tun.sh` | 启动 TUN、等隧道就绪、设置系统 DNS、写就绪标记、注入域名 /32 路由（root） |
 | `zc-vpn-on` / `zc-vpn-off` | 启停入口，sudoers 只放行这两个 |
 | `zc-vpn-status` | 命令行状态查询（普通用户可跑）；输出 `connected` / `connecting` / `disconnected`，退出码 `0` / `2` / `1`。App 现在进程内检查状态，脚本保留给排障 |
-| `zc-dns-restore` | 按启动前快照还原被 `-dns-hijack` 改写的系统 DNS（root，崩溃兜底） |
+| `zc-dns-restore` | 按启动前快照还原 `zc-tun.sh` 接管的系统 DNS（root，崩溃兜底） |
 | `install.sh` | 一次性安装：权限、sudoers、清理旧版组件 |
 | `uninstall.sh` | 停止 VPN、撤销 sudoers 规则、移除登录自启（需要 root，会自行提权） |
 
@@ -45,18 +45,26 @@ App 解析配置后，把参数以 `key=value` 形式通过 **stdin** 交给 `zc
 取值并做格式校验（hostname、端口、utun 名、监听地址），然后把值放进环境变量交给
 `zc-tun.sh`。root 侧从不 `source`/`eval` 用户可写的文件，避免把配置目录变成提权入口。
 
-## 隧道异常退出后的 DNS 还原
+## 系统 DNS 与异常退出后的还原
 
-`-dns-hijack` 会把各网络服务的 DNS 改成 VPN 内网地址（`2.0.1.x`）。zju-connect 正常
-退出时会自己还原，但它在 TUN 重连时 `panic`，那条路径不会执行清理——系统 DNS 会一直
-指向已经不可达的内网地址，整机域名解析失效。
+系统 DNS 默认由 `zc-tun.sh` 接管：启动 zju-connect 时传 `-dns-hijack=false`——原来的
+`-dns-hijack` 会在启动时串行遍历**所有**网络服务改 DNS，每个服务 1–2 秒，通常要多等
+10 秒。utun 就绪后，脚本只对**当前有 IPv4 地址**的网络服务设置 DNS（通常只有
+Wi-Fi/有线一个，约 2 秒），设置的值记在 `/var/run/zju-connect.dns.active`。
 
-所以启动前 `zc-tun.sh` 会把各服务原始 DNS 记到 `/var/run/zju-connect.dns`，以下三条
-路径都会调用 `zc-dns-restore` 按快照还原（只动仍指向 `2.0.1.x` 或被清空的服务）：
+配置里的 `dnsMode` 可以切回 zju-connect 的实现：`script`（默认）走上面的脚本逻辑；
+`zju` 保留 zju-connect 的 `-dns-hijack`，此时脚本不再设置系统 DNS。`multiLine` 同理：
+`script`（默认）传 `-disable-multi-line`，跳过登录后的线路 ping 测速；`zju` 交还
+zju-connect 自动选线。
+
+`dnsMode=script` 时，`apply_system_dns` 在设置每个服务前把原值记到
+`/var/run/zju-connect.dns`（只记录实际被修改的服务）；`dnsMode=zju` 时仍在启动前
+全量快照（zju-connect 会改所有服务）。以下三条路径都会调用 `zc-dns-restore`
+按快照还原（只动仍指向 VPN DNS 或被清空的服务）：
 
 1. `zc-tun.sh` 的 EXIT 清理（每 5 秒检查子进程，panic 后最多 5 秒触发）；
 2. `zc-vpn-off`（覆盖 `kill -9` / 手动清理）；
-3. App 断开状态下读取 `/etc/resolv.conf`，发现仍是 `2.0.1.x` 时自动调用 `zc-vpn-off`。
+3. App 断开状态下读取 `/etc/resolv.conf`，发现仍是 VPN DNS 时自动调用 `zc-vpn-off`。
 
 ## 安装时发生了什么
 
@@ -72,6 +80,7 @@ App 首次点「连接」会弹管理员密码，以 root 运行 `install.sh`：
 - `/etc/sudoers.d/vpnmenu`（免密规则，必须由系统读取）
 - `/var/run/zju-connect.pid`（运行时 PID）
 - `/var/run/zju-connect.ready`（隧道就绪标记）
+- `/var/run/zju-connect.dns.active`（当前设置的 VPN DNS，退出时删除）
 - `~/Library/Logs/VPNMenu/zju-connect.log`（日志，超过 5MB 时轮转为 `.log.1`）
 - `~/Library/LaunchAgents/com.lcssos.vpnmenu.plist`（登录自启，`install.sh` 不碰它，
   `uninstall.sh` 会删除）

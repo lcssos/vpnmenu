@@ -28,9 +28,15 @@ fi
 
 echo "disconnected"
 
-# zju-connect 在 panic 时不会还原 -dns-hijack 改写的 DNS（会留下 2.0.1.x），
-# 这里给出信号，App 收到后用 zc-vpn-off 做兜底清理。
+# 隧道异常退出时系统 DNS 可能仍指向 VPN 内网地址（2.0.1.x，或
+# /var/run/zju-connect.dns.active 记录的当前值），这里给出信号，
+# 供排障或 App 调用 zc-vpn-off 做兜底清理。
+STALE=no
 if grep -qE '^nameserver[[:space:]]+2\.0\.1\.[0-9]+' /etc/resolv.conf 2>/dev/null; then
-  echo "dns=stale"
+  STALE=yes
+elif [[ -s /var/run/zju-connect.dns.active ]] \
+     && grep -qF "$(cat /var/run/zju-connect.dns.active)" /etc/resolv.conf 2>/dev/null; then
+  STALE=yes
 fi
+[[ "$STALE" == yes ]] && echo "dns=stale"
 exit 1

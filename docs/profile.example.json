@@ -13,5 +13,7 @@
   "domains": [
     "app.example.com",
     "db.example.com"
-  ]
+  ],
+  "dnsMode": "script",
+  "multiLine": "script"
 }

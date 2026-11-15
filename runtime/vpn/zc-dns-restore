@@ -1,17 +1,25 @@
 #!/bin/bash
 # Copyright (C) 2026 lcssos
 # SPDX-License-Identifier: AGPL-3.0-only
-# 还原被 zju-connect -dns-hijack 改写的系统 DNS（root 运行）
+# 还原 zc-tun.sh 接管的系统 DNS（root 运行）
 #
-# 正常断开时 zju-connect 自己会清理；但它在 TUN 重连 panic 时不会执行清理，
-# 系统 DNS 会留在 2.0.1.x（隧道已死、不可达），导致整机域名解析失效。
-# 本脚本按 zc-tun.sh 启动前保存的快照恢复；没有快照时只把仍指向
-# 2.0.1.x 的服务设回「自动」。
+# 正常断开时 zc-tun.sh 的 EXIT 清理会调用本脚本；被 kill -9 或崩溃时由
+# zc-vpn-off 兜底调用。系统 DNS 会留在 2.0.1.x（隧道已死、不可达），
+# 导致整机域名解析失效。本脚本按启动前保存的快照恢复；没有快照时只把
+# 仍指向 VPN DNS（2.0.1.x 或 active 文件记录的地址）的服务设回「自动」。
 set -uo pipefail
 
 SNAPSHOT=/var/run/zju-connect.dns
+# zc-tun.sh 自己接管系统 DNS 后会把地址记在这里。EasyConnect 的虚拟 IP 通常是
+# 2.0.1.x（下面有兜底），但不再依赖这一点。
+ACTIVE=/var/run/zju-connect.dns.active
+ACTIVE_DNS=""
+[[ -f "$ACTIVE" ]] && ACTIVE_DNS="$(cat "$ACTIVE" 2>/dev/null)"
 
-is_vpn_dns() { [[ "$1" =~ 2\.0\.1\.[0-9]+ ]]; }
+is_vpn_dns() {
+  [[ "$1" =~ 2\.0\.1\.[0-9]+ ]] && return 0
+  [[ -n "$ACTIVE_DNS" && "$1" == "$ACTIVE_DNS" ]]
+}
 
 current_dns() {
   networksetup -getdnsservers "$1" 2>/dev/null \
@@ -41,7 +49,6 @@ if [[ -f "$SNAPSHOT" ]]; then
       changed=yes
     fi
   done < "$SNAPSHOT"
-  rm -f "$SNAPSHOT"
 else
   while IFS= read -r svc; do
     [[ -z "$svc" ]] && continue
@@ -52,6 +59,8 @@ else
     fi
   done < <(networksetup -listallnetworkservices 2>/dev/null | tail -n +2 | sed 's/^\*//')
 fi
+
+rm -f "$SNAPSHOT" "$ACTIVE"
 
 if [[ "$changed" == yes ]]; then
   dscacheutil -flushcache 2>/dev/null || true

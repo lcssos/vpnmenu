@@ -24,15 +24,30 @@ struct Profile: Codable {
     var httpBind: String?
     var domains: [String]?
     var proxyDomains: [String]?
+    /// 系统 DNS 由谁实现：`script`（默认，zc-tun.sh 只改有 IP 的服务）或
+    /// `zju`（zju-connect 的 -dns-hijack，启动时串行改所有服务）。
+    var dnsMode: String?
+    /// 多线路选线由谁实现：`script`（默认，直接用配置的 server）或
+    /// `zju`（zju-connect 登录后 ping 各线路选最优）。
+    var multiLine: String?
 
     var backendID: String { backend ?? BackendID.zjuConnect }
     var portValue: Int { port ?? 4430 }
     var domainList: [String] { domains ?? [] }
     var proxyDomainList: [String] { proxyDomains ?? [] }
+    var dnsModeValue: String {
+        let v = dnsMode ?? ""
+        return v.isEmpty ? "script" : v
+    }
+    var multiLineValue: String {
+        let v = multiLine ?? ""
+        return v.isEmpty ? "script" : v
+    }
 
     private enum CodingKeys: String, CodingKey {
         case schema, backend, name, server, port
         case tunInterface, socksBind, httpBind, domains, proxyDomains
+        case dnsMode, multiLine
     }
 
     func encode(to encoder: Encoder) throws {
@@ -47,6 +62,8 @@ struct Profile: Codable {
         try c.encodeIfPresent(httpBind, forKey: .httpBind)
         try c.encodeIfPresent(domains, forKey: .domains)
         try c.encodeIfPresent(proxyDomains, forKey: .proxyDomains)
+        try c.encodeIfPresent(dnsMode, forKey: .dnsMode)
+        try c.encodeIfPresent(multiLine, forKey: .multiLine)
     }
 }
 
@@ -85,6 +102,12 @@ enum ProfileValidation {
         if all.count > 500 { return "域名数量过多" }
         for d in all where !isHost(d) {
             return "域名不合法：\(d)"
+        }
+        if let v = p.dnsMode, !v.isEmpty, v != "script", v != "zju" {
+            return "DNS 模式不合法：\(v)（可选 script / zju）"
+        }
+        if let v = p.multiLine, !v.isEmpty, v != "script", v != "zju" {
+            return "选线模式不合法：\(v)（可选 script / zju）"
         }
         return nil
     }

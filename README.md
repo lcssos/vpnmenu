@@ -34,7 +34,7 @@ macOS 菜单栏 VPN 开关 · 用 zju-connect 替代 EasyConnect 客户端
 - **凭据不落盘**：账号密码存登录钥匙串，通过 stdin 交给 root 脚本；密码不落盘、不进 `ps`
   （用户名会作为 zju-connect 的 `-username` 参数出现在进程列表里）。
 - **多配置**：导入 / 导出 JSON，已连接时切换会自动重连。
-- **崩溃兜底**：zju-connect 异常退出后自动还原被 `dns-hijack` 改写的系统 DNS。
+- **崩溃兜底**：系统 DNS 由启动脚本按需接管（只改有 IP 的网络服务），异常退出后按快照还原。
 - **轻量常驻**：稳态下只做 `kill(0)` 检查，不 fork 子进程；配置变化时才重新解析。
 - **通用二进制**：同一份 App 在 Intel 与 Apple Silicon 上原生运行，无需 Rosetta。
 
@@ -61,11 +61,11 @@ macOS 菜单栏 VPN 开关 · 用 zju-connect 替代 EasyConnect 客户端
 ```mermaid
 flowchart LR
     UI["菜单栏 App<br/>配置 JSON · 登录钥匙串"] -->|"stdin 传参"| ON["zc-vpn-on<br/>sudo 唯一入口"]
-    ON --> TUN["zc-tun.sh<br/>等就绪 · 注入 /32 路由"]
+    ON --> TUN["zc-tun.sh<br/>等就绪 · 设置 DNS · 注入 /32 路由"]
     TUN --> ZC["zju-connect<br/>EasyConnect 协议 · TUN 模式"]
     ZC --> UTUN["utun4<br/>分流隧道"]
     UTUN --> LAN["内网资源"]
-    ZC -.->|"dns-hijack"| DNS["内网 DNS<br/>2.0.1.x"]
+    TUN -->|"设置系统 DNS"| DNS["内网 DNS<br/>2.0.1.x"]
     TUN -.->|"退出 / 崩溃"| FIX["zc-dns-restore"]
     FIX -.->|"按快照还原"| DNS
 
@@ -182,7 +182,9 @@ VPNMenu 只是一个菜单栏外壳，真正的 EasyConnect 协议实现来自
 客户端（本项目使用 **v1.3.1**）。
 
 - **用法**：App 以独立进程启动 App 包内的 `zju-connect`，通过 stdin 传连接参数，
-  通过 TUN 接口建立分流隧道；不链接、不修改它的代码。
+  通过 TUN 接口建立分流隧道；不链接、不修改它的代码。系统 DNS 和多线路选线默认由
+  `zc-tun.sh` 简化实现（更快）；配置里把 `dnsMode` / `multiLine` 设为 `zju` 可以
+  切回 zju-connect 的实现。
 - **来源**：`vendor/zju-connect-darwin-{amd64,arm64}` 是从上游 release 下载的官方
   二进制（这两个文件不进 git），`tools/build.sh` 只用 `lipo` 合并成通用二进制并重新签名。
 - **许可证**：zju-connect 使用 **AGPL-3.0**，详见
@@ -211,7 +213,9 @@ VPNMenu 只是一个菜单栏外壳，真正的 EasyConnect 协议实现来自
   "socksBind": "127.0.0.1:1090",
   "httpBind": "127.0.0.1:1091",
   "proxyDomains": ["legacy.example.com"],
-  "domains": ["app.example.com", "db.example.com"]
+  "domains": ["app.example.com", "db.example.com"],
+  "dnsMode": "script",
+  "multiLine": "script"
 }
 ```
 
@@ -220,6 +224,10 @@ VPNMenu 只是一个菜单栏外壳，真正的 EasyConnect 协议实现来自
 - `domains`：需要走隧道、且服务端 rclist 未下发 IP 的域名。连接后脚本用内网 DNS 解析，
   把结果注入 `/32` 路由；每 5 分钟刷新。
 - `proxyDomains`：需要额外传给 zju-connect `-custom-proxy-domain` 的域名。
+- `dnsMode`：系统 DNS 由谁实现。`script`（默认）由 `zc-tun.sh` 只改当前有 IP 的网络
+  服务；`zju` 用 zju-connect 的 `-dns-hijack`（启动时串行改所有服务，多等约 10 秒）。
+- `multiLine`：`script`（默认）不做线路 ping 测速，直接连配置的服务器；`zju` 由
+  zju-connect 登录后自动 ping 各线路选最优（多等约 2 秒）。
 - `tunInterface` / `socksBind` / `httpBind` / `port` 可省略，默认 `utun4` /
   `127.0.0.1:1090` / `127.0.0.1:1091` / `4430`。
 
@@ -344,6 +352,7 @@ xattr -dr com.apple.quarantine /Applications/VPNMenu.app
 - `/etc/sudoers.d/vpnmenu` —— 只允许当前用户免密执行 App 内的 `zc-vpn-on` / `zc-vpn-off`
 - `/var/run/zju-connect.pid` —— 运行时 PID
 - `/var/run/zju-connect.ready` —— 隧道就绪标记（退出时删除）
+- `/var/run/zju-connect.dns.active` —— 当前设置的 VPN DNS（退出时删除）
 - `~/Library/Logs/VPNMenu/zju-connect.log` —— 日志（超过 5MB 时轮转为 `.log.1`）
 - `~/Library/Application Support/VPNMenu/profiles/` —— 本机配置（不进包、不进 git）
 - `~/Library/Application Support/VPNMenu/instance.lock` —— 单实例锁（进程退出自动释放）
@@ -353,6 +362,7 @@ xattr -dr com.apple.quarantine /Applications/VPNMenu.app
 
 - **内网 DNS 地址不是固定的**：zju-connect 的虚拟 IP 每个会话可能是 `2.0.1.1` 或
   `2.0.1.2`，DNS 就监听在这个地址上。`zc-tun.sh` 从 utun 接口地址动态读取，不能写死。
+  系统 DNS 只设置在**当前有 IP 的网络服务**上；切换网络后由重连流程重新设置。
 - **单会话**：同一账号只允许一个 VPN 会话，不要在连接期间再起第二个 zju-connect。
 - **路径不能含空格**：sudoers 的路径匹配不支持空格，`install.sh` 会直接报错。
 - **配置目录不要提交**：`.gitignore` 已加 `profiles/` 与 `*.vpnprofile.json` 兜底，

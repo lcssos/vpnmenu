@@ -14,12 +14,17 @@ PIDFILE=/var/run/zju-connect.pid
 READYFILE=/var/run/zju-connect.ready
 # cleanup 完整跑完（含 DNS 还原）后写入，供 zc-vpn-off 判断是否需要再做一次兜底还原
 CLEANFILE=/var/run/zju-connect.clean
+# 本脚本自己接管系统 DNS 时，把设置的地址记下来，供 zc-dns-restore 识别是否仍是我们的值
+ACTIVE_DNS_FILE=/var/run/zju-connect.dns.active
 
 : "${VPN_SERVER:?缺少服务器地址}"
 VPN_PORT="${VPN_PORT:-4430}"
 VPN_IF="${VPN_IF:-utun4}"
 SOCKS_BIND="${SOCKS_BIND:-127.0.0.1:1090}"
 HTTP_BIND="${HTTP_BIND:-127.0.0.1:1091}"
+# 两个功能的实现方（由配置里的 dnsMode / multiLine 决定，默认都走本脚本）
+DNS_MODE="${VPN_DNS_MODE:-script}"
+MULTI_LINE="${VPN_MULTI_LINE:-script}"
 
 DOMAINS=()
 PROXY_DOMAINS=()
@@ -42,7 +47,7 @@ if [[ -f "$PIDFILE" ]] && /bin/kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
   exit 0
 fi
 # 清掉上一次可能残留的就绪标记，等本次 utun / 路由真正就绪后再写
-rm -f "$READYFILE" "$CLEANFILE"
+rm -f "$READYFILE" "$CLEANFILE" "$ACTIVE_DNS_FILE"
 echo "$$" > "$PIDFILE"
 
 # 账号/密码由 zc-vpn-on 从 App 的 stdin 读入后通过环境变量传入，不落盘。
@@ -62,19 +67,25 @@ if [[ ${#PROXY_DOMAINS[@]} -gt 0 ]]; then
   done
 fi
 
-# -dns-hijack 会把各网络服务的 DNS 改成 VPN 内网地址，而 zju-connect 在 panic 时
-# 不会执行自己的清理。启动前先记下原始 DNS，异常退出后由 zc-dns-restore 按快照还原。
+# zc-dns-restore 按这个快照还原系统 DNS。
+#   DNS_MODE=zju：zju-connect 的 -dns-hijack 会改所有服务，必须在启动前全量快照；
+#   DNS_MODE=script（默认）：apply_system_dns 只改有 IP 的服务，设置前逐个记录原值，
+#   不再为闲置服务白等 networksetup（VPN 刚断开时每次调用可能慢到 1 秒）。
 DNS_SNAPSHOT=/var/run/zju-connect.dns
-: > "$DNS_SNAPSHOT" 2>/dev/null || true
-while IFS= read -r svc; do
-  [[ -z "$svc" ]] && continue
-  cur=$(networksetup -getdnsservers "$svc" 2>/dev/null \
-    | grep -E '^[0-9]+(\.[0-9]+){3}$' | tr '\n' ' ' | sed 's/ *$//')
-  # 上一次崩溃可能留下 2.0.1.x，这种“原值”等同于自动获取
-  [[ "$cur" =~ 2\.0\.1\.[0-9]+ ]] && cur=""
-  printf '%s\t%s\n' "$svc" "$cur" >> "$DNS_SNAPSHOT"
-done < <(networksetup -listallnetworkservices 2>/dev/null | tail -n +2 | sed 's/^\*//')
-chmod 644 "$DNS_SNAPSHOT" 2>/dev/null || true
+if [[ "$DNS_MODE" == "zju" ]]; then
+  : > "$DNS_SNAPSHOT" 2>/dev/null || true
+  while IFS= read -r svc; do
+    [[ -z "$svc" ]] && continue
+    cur=$(networksetup -getdnsservers "$svc" 2>/dev/null \
+      | grep -E '^[0-9]+(\.[0-9]+){3}$' | tr '\n' ' ' | sed 's/ *$//')
+    # 上一次崩溃可能留下 2.0.1.x，这种“原值”等同于自动获取
+    [[ "$cur" =~ 2\.0\.1\.[0-9]+ ]] && cur=""
+    printf '%s\t%s\n' "$svc" "$cur" >> "$DNS_SNAPSHOT"
+  done < <(networksetup -listallnetworkservices 2>/dev/null | tail -n +2 | sed 's/^\*//')
+  chmod 644 "$DNS_SNAPSHOT" 2>/dev/null || true
+else
+  rm -f "$DNS_SNAPSHOT"
+fi
 
 # 日志轮转：超过 5MB 时把上一份留成 .1，避免长期使用无限增长
 if [[ -f "$LOG" ]]; then
@@ -84,18 +95,42 @@ if [[ -f "$LOG" ]]; then
   fi
 fi
 
+# 两个功能可以按配置选择实现方：
+#   DNS_MODE=script   系统 DNS 由 apply_system_dns 只对活跃服务设置（默认）
+#   DNS_MODE=zju      zju-connect 的 -dns-hijack 串行遍历所有服务（约多等 10 秒）
+#   MULTI_LINE=script 不做 ping 测速，直接使用配置的 server（默认）
+#   MULTI_LINE=zju    zju-connect 登录后自动 ping 各线路选最优（约多等 2 秒）
+if [[ "$DNS_MODE" == "zju" ]]; then
+  DNS_ARG="-dns-hijack"
+else
+  DNS_ARG="-dns-hijack=false"
+fi
+if [[ "$MULTI_LINE" == "zju" ]]; then
+  MULTI_ARG=""
+else
+  MULTI_ARG="-disable-multi-line"
+fi
+echo "modes: dns=$DNS_MODE multi-line=$MULTI_LINE" >> "$LOG"
+
 "$DIR/zju-connect" -server "$VPN_SERVER" -port "$VPN_PORT" -username "$VPN_ACCOUNT" \
   -disable-zju-config -remote-dns-server auto \
   ${EXTRA[@]+"${EXTRA[@]}"} \
   -socks-bind "$SOCKS_BIND" -http-bind "$HTTP_BIND" \
-  -tun-mode -add-route -dns-hijack >> "$LOG" 2>&1 &
+  -tun-mode -add-route "$DNS_ARG" ${MULTI_ARG:+"$MULTI_ARG"} >> "$LOG" 2>&1 &
 VPN_PID=$!
 
 cleanup() {
+  # 可能还有后台的 apply_system_dns 在改 DNS：先终止/等它结束，再按快照还原，
+  # 避免还原之后它又把 DNS 改回 VPN 地址。
+  if [[ -n "${DNS_APPLY_PID:-}" ]]; then
+    /bin/kill "$DNS_APPLY_PID" 2>/dev/null
+    wait "$DNS_APPLY_PID" 2>/dev/null
+    DNS_APPLY_PID=""
+  fi
   /bin/kill "$VPN_PID" 2>/dev/null
   wait "$VPN_PID" 2>/dev/null
   rm -f "$PIDFILE" "$READYFILE"
-  # 正常退出时 zju-connect 已自己清过 DNS，这一步是 panic/强杀时的兜底
+  # 系统 DNS 由本脚本设置，退出时统一按启动前快照还原
   /bin/bash "$DIR/zc-dns-restore" >/dev/null 2>&1 || true
   : > "$CLEANFILE" 2>/dev/null || true
   chmod 644 "$CLEANFILE" 2>/dev/null || true
@@ -137,6 +172,52 @@ if [[ ${#DOMAINS[@]} -gt 0 ]]; then
   done
 fi
 
+# 接管系统 DNS（替代 zju-connect -dns-hijack 的串行全量遍历）。
+# 只改当前有 IPv4 地址的网络服务：闲置服务（未连接的 Thunderbolt Bridge、
+# iPhone USB 等）不改，避免每个服务白等 networksetup 的 1-2 秒。
+# 配置了域名路由时，上面的等待已经确认内网 DNS 可用，因此不会出现解析空窗。
+apply_system_dns() {
+  local svc cur list=""
+  # 只快照本次真正会改的服务：先记录原值再设置，进程中途被强杀也能还原。
+  : > "$DNS_SNAPSHOT" 2>/dev/null || true
+  # 先把目标值记下来：即使设置到一半被强杀，zc-dns-restore 也能识别残留并还原。
+  printf '%s\n' "$VPN_DNS" > "$ACTIVE_DNS_FILE" 2>/dev/null || true
+  chmod 644 "$ACTIVE_DNS_FILE" 2>/dev/null || true
+  while IFS= read -r svc; do
+    [[ -z "$svc" ]] && continue
+    networksetup -getinfo "$svc" 2>/dev/null \
+      | grep -qE '^IP address: [0-9]+\.' || continue
+    cur=$(networksetup -getdnsservers "$svc" 2>/dev/null \
+      | grep -E '^[0-9]+(\.[0-9]+){3}$' | tr '\n' ' ' | sed 's/ *$//')
+    [[ "$cur" =~ 2\.0\.1\.[0-9]+ ]] && cur=""
+    if ! printf '%s\t%s\n' "$svc" "$cur" >> "$DNS_SNAPSHOT" 2>/dev/null; then
+      echo "failed to record DNS snapshot for $svc" >> "$LOG"
+      continue
+    fi
+    if networksetup -setdnsservers "$svc" "$VPN_DNS" >/dev/null 2>&1; then
+      list="$list $svc"
+    else
+      echo "failed to set DNS server on $svc" >> "$LOG"
+    fi
+  done < <(networksetup -listallnetworkservices 2>/dev/null | tail -n +2 | sed 's/^\*//')
+  chmod 644 "$DNS_SNAPSHOT" 2>/dev/null || true
+
+  [[ -z "$list" ]] && return 0
+  echo "system DNS set to $VPN_DNS on:$list" >> "$LOG"
+  dscacheutil -flushcache 2>/dev/null || true
+  killall -HUP mDNSResponder 2>/dev/null || true
+}
+
+# 系统 DNS 与域名路由互不依赖（dig 直接指定内网 DNS），并行执行；
+# 写就绪标记前再等 DNS 设置完成，避免“已连接但内网域名还解析不了”。
+DNS_APPLY_PID=""
+if [[ "$DNS_MODE" == "zju" ]]; then
+  echo "system DNS left to zju-connect (-dns-hijack)" >> "$LOG"
+else
+  apply_system_dns &
+  DNS_APPLY_PID=$!
+fi
+
 resolve_domain() {
   local d="$1" ips
   # 两次足够覆盖偶发失败；无 A 记录的域名不再白等 3×2s。
@@ -145,7 +226,7 @@ resolve_domain() {
     ips=$(dig @"$VPN_DNS" +time=2 +tries=1 +short "$d" 2>/dev/null \
       | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
     [[ -n "$ips" ]] && { printf '%s\n' "$ips"; return 0; }
-    sleep 1
+    sleep 0.3
   done
   return 0
 }
@@ -188,6 +269,12 @@ add_domain_routes() {
 }
 
 add_domain_routes
+
+# 系统 DNS 设置完成后再写就绪标记（它与域名路由是并行跑的）
+if [[ -n "$DNS_APPLY_PID" ]]; then
+  wait "$DNS_APPLY_PID" 2>/dev/null
+  DNS_APPLY_PID=""
+fi
 
 # 到这里才认为隧道可用：写入就绪标记（包装脚本 PID + zju-connect PID）
 if ! /bin/kill -0 "$VPN_PID" 2>/dev/null; then

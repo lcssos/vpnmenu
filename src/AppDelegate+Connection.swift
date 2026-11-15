@@ -148,13 +148,14 @@ extension AppDelegate {
         DispatchQueue.global().async {
             var sawProcess = false
             var processDied = false
-            // utun 就绪通常几秒；90 秒覆盖 DNS 等待和多个域名的重试上限
-            for i in 0..<90 {
-                sleep(1)
+            // utun 就绪通常几秒；90 秒覆盖 DNS 等待和多个域名的重试上限。
+            // 0.25 秒轮询：就绪标记写入后能立刻反映到图标，不必按整秒等。
+            for i in 0..<360 {
+                Thread.sleep(forTimeInterval: 0.25)
                 if backend.readyVerified() { break }
                 if backend.processPresent() {
                     sawProcess = true
-                } else if sawProcess || i >= 5 {
+                } else if sawProcess || i >= 20 {
                     processDied = true  // 启动后很快退出，或 5 秒内根本没起来
                     break
                 }

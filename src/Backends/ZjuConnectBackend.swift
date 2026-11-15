@@ -56,6 +56,9 @@ final class ZjuConnectBackend: VPNBackend {
         if let v = p.httpBind, !v.isEmpty { lines.append("HTTP_BIND=\(v)") }
         for d in p.domainList { lines.append("DOMAIN=\(d)") }
         for d in p.proxyDomainList { lines.append("PROXY_DOMAIN=\(d)") }
+        // 两个功能的实现方：script（默认，本仓库脚本）或 zju（zju-connect）
+        lines.append("DNS_MODE=\(p.dnsModeValue)")
+        lines.append("MULTI_LINE=\(p.multiLineValue)")
         return lines.joined(separator: "\n") + "\n"
     }
 
@@ -86,7 +89,20 @@ final class ZjuConnectBackend: VPNBackend {
             return false
         }
         // (?m) 多行模式：只匹配行首的 nameserver
-        return text.range(of: #"(?m)^nameserver[ \t]+2\.0\.1\.[0-9]+"#,
-                          options: .regularExpression) != nil
+        if text.range(of: #"(?m)^nameserver[ \t]+2\.0\.1\.[0-9]+"#,
+                      options: .regularExpression) != nil {
+            return true
+        }
+        // 系统 DNS 现在由 zc-tun.sh 接管；地址不在 2.0.1.x 段时按它记录的当前值判断
+        if let dns = try? String(contentsOfFile: "/var/run/zju-connect.dns.active",
+                                 encoding: .utf8) {
+            let addr = dns.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !addr.isEmpty,
+               text.range(of: "(?m)^nameserver[ \\t]+\(NSRegularExpression.escapedPattern(for: addr))",
+                          options: .regularExpression) != nil {
+                return true
+            }
+        }
+        return false
     }
 }

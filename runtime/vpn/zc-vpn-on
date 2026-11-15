@@ -13,6 +13,8 @@
 #   HTTP_BIND=127.0.0.1:1091 （可选）
 #   DOMAIN=app.example.com     （可重复）
 #   PROXY_DOMAIN=old.example.com（可重复）
+#   DNS_MODE=script|zju        （可选，默认 script：系统 DNS 由 zc-tun.sh 设置）
+#   MULTI_LINE=script|zju      （可选，默认 script：不做线路 ping 测速）
 #
 # 安全约定：这里只按白名单取值并校验格式，**绝不 source/eval 任何配置文件**。
 # 配置虽然由 App 从用户可写的 JSON 解析而来，但 root 侧看到的是纯数据。
@@ -42,6 +44,8 @@ SOCKS_BIND="127.0.0.1:1090"
 HTTP_BIND="127.0.0.1:1091"
 VPN_DOMAINS=""
 VPN_PROXY_DOMAINS=""
+VPN_DNS_MODE="script"
+VPN_MULTI_LINE="script"
 
 while IFS= read -r line || [[ -n "$line" ]]; do
   line="${line%$'\r'}"
@@ -62,6 +66,8 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     HTTP_BIND)    HTTP_BIND="$val" ;;
     DOMAIN)       [[ -n "$val" ]] && VPN_DOMAINS="$VPN_DOMAINS $val" ;;
     PROXY_DOMAIN) [[ -n "$val" ]] && VPN_PROXY_DOMAINS="$VPN_PROXY_DOMAINS $val" ;;
+    DNS_MODE)     VPN_DNS_MODE="$val" ;;
+    MULTI_LINE)   VPN_MULTI_LINE="$val" ;;
     *)
       echo "unknown field: $key" >&2
       exit 2
@@ -95,11 +101,27 @@ for d in $VPN_DOMAINS $VPN_PROXY_DOMAINS; do
     exit 2
   fi
 done
+case "$VPN_DNS_MODE" in
+  script|zju) ;;
+  *) echo "invalid dns mode: $VPN_DNS_MODE" >&2; exit 2 ;;
+esac
+case "$VPN_MULTI_LINE" in
+  script|zju) ;;
+  *) echo "invalid multi-line mode: $VPN_MULTI_LINE" >&2; exit 2 ;;
+esac
 
 export VPN_ACCOUNT VPN_SECRET VPN_SERVER VPN_PORT VPN_IF SOCKS_BIND HTTP_BIND
 export VPN_DOMAINS VPN_PROXY_DOMAINS
+export VPN_DNS_MODE VPN_MULTI_LINE
 
+# 清掉可能残留的 pidfile（前面已确认没有活进程），避免下面的轮询看到旧文件提前返回
+rm -f "$PIDFILE"
 nohup "$DIR/zc-tun.sh" </dev/null >/dev/null 2>&1 &
-sleep 1
+# 等包装脚本写下 pidfile 再返回：通常 <0.2 秒，最多兜底 1 秒。
+# 不再固定 sleep 1，连接入口能早一点把控制权交回 App。
+for _ in $(seq 1 20); do
+  [[ -s "$PIDFILE" ]] && break
+  sleep 0.05
+done
 unset VPN_SECRET
 echo "started"
