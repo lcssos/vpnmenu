@@ -25,6 +25,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var cancelWait = false     // 用户主动断开，抑制“连接失败”提示
     var quitting = false       // 正在断开并退出
     var lastIconLog = ""
+    // 按连接状态缓存模板图标，避免 5 秒轮询重复生成 SF Symbol 位图
+    var iconCache: [String: NSImage] = [:]
     var tunnelBackend: VPNBackend?
 
     // 配置（只从本机目录读取）
@@ -100,7 +102,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 5 秒轮询：状态变化（外部连接/退出、panic 后的 DNS 修复）最长延迟 5 秒。
         // tolerance 允许系统把这几次唤醒合并到别的定时器上，省电；代价是再多最多 1 秒延迟。
         timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
-            self?.refresh()
+            // 轮询里的临时字符串/字典/文件内容在下一次 tick 前就释放，不留在 autorelease 池里
+            autoreleasepool { self?.refresh() }
         }
         timer?.tolerance = 1.0
 
