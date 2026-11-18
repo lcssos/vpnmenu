@@ -6,7 +6,7 @@ import Cocoa
 // MARK: - 配置菜单
 
 extension AppDelegate {
-    /// 每 5 秒的刷新会调用这里，但只有「目录 mtime 变了 / 第一次扫描 / 距上次扫描
+    /// 每次刷新状态都会调用这里，但只有「目录 mtime 变了 / 第一次扫描 / 距上次扫描
     /// 超过 60 秒 / 显式 force」时才真正读盘并解码 JSON，避免每次轮询全量解析配置。
     func reloadProfiles(force: Bool = false) {
         let now = Date()
@@ -108,6 +108,8 @@ extension AppDelegate {
 
     private func switchAndReconnect() {
         guard !busy else { return }
+        // 旧配置的期望状态先清掉；connect() 会按新选中的配置重新登记
+        clearDesiredProfile()
         beginBusy("VPN：切换配置…")
         let backend = currentTunnelBackend()
         DispatchQueue.global().async {
@@ -174,6 +176,7 @@ extension AppDelegate {
         guard a.runModal() == .alertFirstButtonReturn else { return }
         ProfileStore.delete(id: sel.id)
         deleteCredential(service: credentialService(for: sel.id))
+        if desiredProfileID == sel.id { clearDesiredProfile() }
         UserDefaults.standard.removeObject(forKey: ProfileStore.selectedKey)
         profilesSignature = ""
         reloadProfiles(force: true)

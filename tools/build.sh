@@ -63,11 +63,13 @@ fi
 # ---------- App 本体 ----------
 echo "== 编译 x86_64"
 swiftc -O -swift-version 5 -target x86_64-apple-macos11.0 \
-  -framework Cocoa -framework Security -o "$BUILD/VPNMenu-x86_64" "${SOURCES[@]}"
+  -framework Cocoa -framework Security -framework Network -framework SystemConfiguration \
+  -o "$BUILD/VPNMenu-x86_64" "${SOURCES[@]}"
 
 echo "== 编译 arm64"
 swiftc -O -swift-version 5 -target arm64-apple-macos11.0 \
-  -framework Cocoa -framework Security -o "$BUILD/VPNMenu-arm64" "${SOURCES[@]}"
+  -framework Cocoa -framework Security -framework Network -framework SystemConfiguration \
+  -o "$BUILD/VPNMenu-arm64" "${SOURCES[@]}"
 
 lipo -create "$BUILD/VPNMenu-x86_64" "$BUILD/VPNMenu-arm64" -output "$BUILD/VPNMenu"
 

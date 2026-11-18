@@ -13,7 +13,9 @@ if [[ -f "$PIDFILE" ]]; then
   # pidfile 里是 zc-tun.sh 包装脚本的 pid；崩溃后 PID 可能被系统复用，先确认再杀
   if ps -ww -p "$PID" -o command= 2>/dev/null | grep -qF "$DIR/zc-tun.sh"; then
     /bin/kill "$PID" 2>/dev/null
-    for _ in $(seq 1 20); do
+    # 包装脚本现在要等 DNS 还原完才删 pidfile（避免和新会话抢 DNS），
+    # 服务多时可能超过 10 秒，所以给到 20 秒。
+    for _ in $(seq 1 40); do
       /bin/kill -0 "$PID" 2>/dev/null || break
       sleep 0.5
     done

@@ -22,6 +22,22 @@ App 和 `zc-vpn-status` 都以这个标记判断「已连接」，而不只是�
 `zc-tun.sh` 会记录日志并直接退出，不会先报已连接再等超时。退出时 pid 文件和就绪标记
 都会被清理。
 
+### 隧道生命周期
+
+`zc-tun.sh` 不做定时轮询：就绪标记写完后直接阻塞 `wait` zju-connect。进程因 panic、
+崩溃或手动断开退出时 `wait` 立即返回，EXIT 清理照常还原 DNS、删除 ready/pidfile。
+
+网络切换（Wi‑Fi 换到另一个网络）由 App 侧感知：`NWPathMonitor` 事件加网络签名，
+稳定 3 秒后先断开再重连。脚本不再探测底层源地址，也不再写健康标记；进程活着但隧道
+静默失效的情况，交给 App 的网络变化检测处理。
+
+域名 `/32` 路由在启动时写入一次，之后由后台循环每 30 分钟重新解析刷新，应对 DNS
+轮换；zju-connect 退出后该循环自行结束。
+
+退出清理的顺序是：杀子进程 → 删除 ready → 还原 DNS → 最后删除 pidfile。这样 App 或
+`zc-vpn-off` 在清理期间仍能通过 pidfile 看到包装脚本并等它收尾，避免旧的 DNS 还原和
+新会话设置 DNS 并发。
+
 ## 第三方组件
 
 `zju-connect` 是 [Mythologyli/zju-connect](https://github.com/Mythologyli/zju-connect)
@@ -62,7 +78,7 @@ zju-connect 自动选线。
 全量快照（zju-connect 会改所有服务）。以下三条路径都会调用 `zc-dns-restore`
 按快照还原（只动仍指向 VPN DNS 或被清空的服务）：
 
-1. `zc-tun.sh` 的 EXIT 清理（每 5 秒检查子进程，panic 后最多 5 秒触发）；
+1. `zc-tun.sh` 的 EXIT 清理（`wait` 返回即触发，panic 后立即还原）；
 2. `zc-vpn-off`（覆盖 `kill -9` / 手动清理）；
 3. App 断开状态下读取 `/etc/resolv.conf`，发现仍是 VPN DNS 时自动调用 `zc-vpn-off`。
 

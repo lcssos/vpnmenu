@@ -120,6 +120,15 @@ echo "modes: dns=$DNS_MODE multi-line=$MULTI_LINE" >> "$LOG"
 VPN_PID=$!
 
 cleanup() {
+  # 先停掉后台路由刷新，避免它和清理过程抢着操作路由。
+  # 非交互 shell 没有作业控制，杀掉循环本身不会带走它的 sleep 子进程，
+  # 所以先按父 PID 清掉子进程，否则每次重连都会留下一个最长 30 分钟的孤儿。
+  if [[ -n "${REFRESH_PID:-}" ]]; then
+    pkill -P "$REFRESH_PID" 2>/dev/null || true
+    /bin/kill "$REFRESH_PID" 2>/dev/null
+    wait "$REFRESH_PID" 2>/dev/null
+    REFRESH_PID=""
+  fi
   # 可能还有后台的 apply_system_dns 在改 DNS：先终止/等它结束，再按快照还原，
   # 避免还原之后它又把 DNS 改回 VPN 地址。
   if [[ -n "${DNS_APPLY_PID:-}" ]]; then
@@ -129,9 +138,13 @@ cleanup() {
   fi
   /bin/kill "$VPN_PID" 2>/dev/null
   wait "$VPN_PID" 2>/dev/null
-  rm -f "$PIDFILE" "$READYFILE"
+  # 先撤就绪标记，App 立刻不再显示“已连接”
+  rm -f "$READYFILE"
   # 系统 DNS 由本脚本设置，退出时统一按启动前快照还原
   /bin/bash "$DIR/zc-dns-restore" >/dev/null 2>&1 || true
+  # pidfile 放到最后删：zc-vpn-off 在清理期间仍能看到包装脚本并等它收尾，
+  # 避免旧的 DNS 还原和新会话设置 DNS 并发。
+  rm -f "$PIDFILE"
   : > "$CLEANFILE" 2>/dev/null || true
   chmod 644 "$CLEANFILE" 2>/dev/null || true
 }
@@ -284,14 +297,24 @@ fi
 printf '%s %s\n' "$$" "$VPN_PID" > "$READYFILE"
 chmod 644 "$READYFILE" 2>/dev/null || true
 
-# 每 5 分钟刷新一次，应对 DNS 轮换 / 路由失效；同时每 5 秒确认 zju-connect 还活着。
-# 不用后台刷新子进程：那样父脚本被 kill -9 时会留下孤儿，TERM 也可能被 sleep 推迟。
-while /bin/kill -0 "$VPN_PID" 2>/dev/null; do
-  for _ in $(seq 1 60); do
-    /bin/kill -0 "$VPN_PID" 2>/dev/null || break 2
-    # 用「后台 sleep + wait」而不是前台 sleep：让 TERM/INT 能立刻打断等待，
-    # 点「断开」不用等满 5 秒才执行 cleanup trap。
-    sleep 5 & wait $!
+# 域名路由刷新：内网 DNS 轮换后旧 /32 路由会失效，只能重新解析补上。
+# 独立后台循环，每 30 分钟一次；每轮醒来先确认 zju-connect 还在，父脚本被
+# kill -9 后也不会长期残留。主脚本本身阻塞在 wait 上，不做存活性轮询。
+ROUTE_REFRESH_SECS=1800
+route_refresher() {
+  while /bin/kill -0 "$VPN_PID" 2>/dev/null; do
+    # 后台 sleep + wait：TERM/INT 能立刻打断等待，不用等满 30 分钟
+    sleep "$ROUTE_REFRESH_SECS" & wait $!
+    /bin/kill -0 "$VPN_PID" 2>/dev/null || break
+    add_domain_routes
   done
-  add_domain_routes
-done
+}
+REFRESH_PID=""
+if [[ ${#DOMAINS[@]} -gt 0 ]]; then
+  route_refresher &
+  REFRESH_PID=$!
+fi
+
+# 阻塞等待 zju-connect 退出；wait 可被 TERM/INT 立刻打断，随后由 EXIT trap
+# 还原 DNS、删除 ready/pidfile。panic 或崩溃时 wait 立即返回，比轮询更及时。
+wait "$VPN_PID"

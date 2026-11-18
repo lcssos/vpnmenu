@@ -20,4 +20,5 @@ func makeProfile(name: String, server: String) -> Profile {
 
 runProfileTests()
 runBackendTests()
+runNetworkTests()
 exit(failures == 0 ? 0 : 1)

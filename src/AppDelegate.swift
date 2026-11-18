@@ -25,9 +25,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var cancelWait = false     // 用户主动断开，抑制“连接失败”提示
     var quitting = false       // 正在断开并退出
     var lastIconLog = ""
-    // 按连接状态缓存模板图标，避免 5 秒轮询重复生成 SF Symbol 位图
+    // 按连接状态缓存模板图标，避免每次刷新重复生成 SF Symbol 位图
     var iconCache: [String: NSImage] = [:]
     var tunnelBackend: VPNBackend?
+
+    // 网络切换后的自动重连（见 AppDelegate+Network.swift）
+    var networkMonitor: NetworkMonitor?
+    var desiredProfileID: String?      // 非空 = 我们期望隧道保持连接
+    var desiredProfile: Profile?       // 配置被删/改名时退回连接时的快照
+    var userDisconnected = false       // 用户手动断开过，直到下次连接前不再自动接管
+    var pendingNetworkReconnect = false
+    var reconnectScheduled = false
+    var lastReconnectAt = Date.distantPast
+    var connectSignature = ""          // 发起连接时的物理网络签名
+    var consecutiveReconnects = 0      // 连续自动重连次数，稳定 60 秒后清零
+    var connectedSince: Date?          // 本次“已连接”开始的时间
 
     // 配置（只从本机目录读取）
     var profileMenuItem: NSMenuItem!
@@ -85,6 +97,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(quitItem)
 
         item.menu = menu
+
+        // 监听物理网络变化：Wi-Fi / 有线切换后底层 TCP 已失效，需要完整重连。
+        networkMonitor = NetworkMonitor { [weak self] in
+            self?.networkPathChanged()
+        }
+        networkMonitor?.start()
+
         ensureLoginItemPlist()
         refresh()
 
@@ -99,13 +118,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        // 暂时停用 5 秒状态轮询（需要时取消注释即可恢复）。
+        // 注意：停用后，外部启停隧道、进程崩溃、脚本健康标记、配置目录直改等
+        // 都不会被自动发现；只有菜单操作、连接/断开收尾、网络变化回调才会 refresh。
         // 5 秒轮询：状态变化（外部连接/退出、panic 后的 DNS 修复）最长延迟 5 秒。
         // tolerance 允许系统把这几次唤醒合并到别的定时器上，省电；代价是再多最多 1 秒延迟。
-        timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
-            // 轮询里的临时字符串/字典/文件内容在下一次 tick 前就释放，不留在 autorelease 池里
-            autoreleasepool { self?.refresh() }
-        }
-        timer?.tolerance = 1.0
+        // timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+        //     // 轮询里的临时字符串/字典/文件内容在下一次 tick 前就释放，不留在 autorelease 池里
+        //     autoreleasepool { self?.refresh() }
+        // }
+        // timer?.tolerance = 1.0
 
         // 只有一个配置时，启动后自动连接（登录自启的常见场景）。
         // 等一次轮询稳定后再做，避免和启动时的状态检查抢。
@@ -125,12 +147,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func refresh() {
         reloadProfiles()
+        // 兜底检查一次网络签名（部分 Wi-Fi 漫游不会产生 NWPath 事件）
+        networkMonitor?.checkNow()
+
         let live = BackendRegistry.live()
         let processAlive = live != nil
         let connected = live?.status.ready ?? false
         // 残留状态修复只在完全没有隧道时做；连接中 / 已连接都不能碰
         if !processAlive {
             BackendRegistry.repairStaleStatesIfIdle(busy: busy)
+        }
+        // 连续自动重连预算：连接稳定 60 秒后清零，避免网络疯狂抖动时无限重连
+        if connected {
+            if connectedSince == nil { connectedSince = Date() }
+            if consecutiveReconnects > 0,
+               let since = connectedSince,
+               Date().timeIntervalSince(since) >= 60 {
+                consecutiveReconnects = 0
+            }
+        } else {
+            connectedSince = nil
+        }
+        // App 重启时隧道可能已经在跑（例如 CLI 或上次没退干净）：把当前选中配置
+        // 记成期望状态，这样之后的网络切换仍能自动重连。
+        if connected, desiredProfileID == nil, !userDisconnected, !busy,
+           let sel = selectedProfile() {
+            armDesiredProfile(sel)
         }
         if !processAlive && !BackendRegistry.anyActiveProcess() && !busy && !waitingReady {
             tunnelBackend = nil

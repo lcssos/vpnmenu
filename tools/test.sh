@@ -8,5 +8,6 @@ swiftc -swift-version 5 -o "$ROOT/build/vpnmenu-tests" \
   "$ROOT"/tests/*.swift \
   "$ROOT"/src/Backends/*.swift \
   "$ROOT"/src/Profile.swift \
-  "$ROOT"/src/Process.swift
+  "$ROOT"/src/Process.swift \
+  "$ROOT"/src/NetworkChangeDetector.swift
 "$ROOT/build/vpnmenu-tests"

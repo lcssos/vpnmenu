@@ -62,6 +62,8 @@ extension AppDelegate {
         guard busy || BackendRegistry.anyActiveProcess() else { return .terminateNow }
         guard !quitting else { return .terminateLater }
         quitting = true
+        clearDesiredProfile()
+        networkMonitor?.stop()
         beginBusy("VPN：断开中…")
         let backend = currentTunnelBackend()
         DispatchQueue.global().async {

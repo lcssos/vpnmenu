@@ -12,6 +12,7 @@ extension AppDelegate {
             showNoProfile()
             return
         }
+        consecutiveReconnects = 0  // 用户手动发起，重置自动重连预算
         startConnect(sel)
     }
 
@@ -36,7 +37,7 @@ extension AppDelegate {
         startConnect(sel)
     }
 
-    private func startConnect(_ sel: (id: String, profile: Profile)) {
+    func startConnect(_ sel: (id: String, profile: Profile)) {
         // 凭据只在钥匙串里；没有就先让用户录入
         guard let cred = loadCredential(for: sel.id) else {
             if promptCredential(for: sel) { startConnect(sel) }
@@ -46,6 +47,9 @@ extension AppDelegate {
             alert("无法连接", "不支持的 VPN 类型：\(sel.profile.backendID)")
             return
         }
+        userDisconnected = false
+        armDesiredProfile(sel)
+        connectSignature = NetworkSignature.current()
         tunnelBackend = backend
         beginBusy("VPN：连接中…")
 
@@ -57,9 +61,15 @@ extension AppDelegate {
                     self.waitForConnected(backend: backend)
                 } else if self.needsInstall(backend, out) {
                     self.askInstall { ok in
-                        if ok { self.startAfterInstall(sel) } else { self.finishBusy() }
+                        if ok {
+                            self.startAfterInstall(sel)
+                        } else {
+                            self.clearDesiredProfile()
+                            self.finishBusy()
+                        }
                     }
                 } else {
+                    self.clearDesiredProfile()
                     self.finishBusy()
                     self.alert("连接失败", out)
                 }
@@ -69,14 +79,19 @@ extension AppDelegate {
 
     private func startAfterInstall(_ sel: (id: String, profile: Profile)) {
         guard let backend = BackendRegistry.backend(for: sel.profile) else {
+            clearDesiredProfile()
             alert("无法连接", "不支持的 VPN 类型：\(sel.profile.backendID)")
             return
         }
+        userDisconnected = false
+        armDesiredProfile(sel)
+        connectSignature = NetworkSignature.current()
         tunnelBackend = backend
         beginBusy("VPN：连接中…")
         DispatchQueue.global().async {
             guard let cred = loadCredential(for: sel.id) else {
                 DispatchQueue.main.async {
+                    self.clearDesiredProfile()
                     self.finishBusy()
                     self.alert("缺少账号", "请先在菜单栏「设置账号…」里录入 VPN 账号和密码。")
                 }
@@ -88,6 +103,7 @@ extension AppDelegate {
                 if code == 0 {
                     self.waitForConnected(backend: backend)
                 } else {
+                    self.clearDesiredProfile()
                     self.finishBusy()
                     self.alert("连接失败", out)
                 }
@@ -117,6 +133,9 @@ extension AppDelegate {
         } else if busy {
             return
         }
+        // 用户明确要断开：之后即使网络变化也不能自动连回来
+        userDisconnected = true
+        clearDesiredProfile()
         beginBusy("VPN：断开中…")
 
         let backend = currentTunnelBackend()
@@ -163,10 +182,23 @@ extension AppDelegate {
             DispatchQueue.main.async {
                 self.waitingReady = false
                 guard !self.quitting else { return }  // 退出流程自己会终止 App
+                if !processDied && backend.readyVerified() {
+                    // 连接期间网络又变了：新会话可能还建在旧路径上，等收尾后重连；
+                    // 否则清掉期间累积的 pending，避免刚连上又重连一次。
+                    // 空签名表示当前无法判定物理网络（例如 utun 成了主接口），
+                    // 不能据此判断变化。
+                    let now = NetworkSignature.current()
+                    if !now.isEmpty, now != self.connectSignature {
+                        self.pendingNetworkReconnect = true
+                    } else {
+                        self.pendingNetworkReconnect = false
+                    }
+                }
                 self.finishBusy()
                 // 只有「进程中途退出」才算失败；仍在启动（超时未就绪）继续显示“连接中…”，
                 // 用户可以断开取消。手动断开时不报失败。
                 if processDied && !self.cancelWait {
+                    self.clearDesiredProfile()
                     self.alert("连接没有成功",
                                "zju-connect 在隧道就绪前退出了。请打开日志查看原因。")
                 }
@@ -188,6 +220,10 @@ extension AppDelegate {
     func finishBusy() {
         busy = false
         stopBusyAnimation()
+        if pendingNetworkReconnect {
+            pendingNetworkReconnect = false
+            schedulePendingReconnect()
+        }
         refresh()
     }
 }

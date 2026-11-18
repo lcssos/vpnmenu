@@ -86,6 +86,7 @@ func runZjuBackendTests() {
         "ACCOUNT=user", "PASSWORD=pass", "SERVER=vpn.example.com", "PORT=4430",
         "TUN_IF=utun9", "SOCKS_BIND=127.0.0.1:2090", "HTTP_BIND=127.0.0.1:2091",
         "DOMAIN=a.example.com", "PROXY_DOMAIN=b.example.com",
+        "DNS_MODE=script", "MULTI_LINE=script",
     ].joined(separator: "\n") + "\n"
     checkEqual(zju.payload(p, ("user", "pass")), expected, "连接参数 payload 不变")
 
