@@ -8,7 +8,7 @@
 #   PASSWORD=密码           （必填）
 #   SERVER=vpn.example.com  （必填）
 #   PORT=4430               （可选）
-#   TUN_IF=utun4            （可选）
+#   TUN_IF=utun4            （可选，只校验格式；实际网卡以 zju-connect 日志为准）
 #   SOCKS_BIND=127.0.0.1:1090（可选）
 #   HTTP_BIND=127.0.0.1:1091 （可选）
 #   DOMAIN=app.example.com     （可重复）

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+bash "$ROOT/tests/discover-tun-if.sh"
 mkdir -p "$ROOT/build"
 swiftc -swift-version 5 -o "$ROOT/build/vpnmenu-tests" \
   "$ROOT"/tests/*.swift \

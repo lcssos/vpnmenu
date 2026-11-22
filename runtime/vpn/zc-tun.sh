@@ -7,6 +7,27 @@
 # 本脚本不读取、也不执行任何配置文件。
 set -uo pipefail
 
+# 从 zju-connect 本次启动之后写入的日志里取出实际网卡名。
+# offset 是 1-based 起始字节（tail -c +N），用来跳过更早会话的 Interface Name。
+# 内核按已占用的 utun 编号顺延，不会复用中间空出来的号，所以不能假定 utun4。
+discover_tun_if() {
+  local file="$1" offset="$2" line name=""
+  [[ "$offset" =~ ^[0-9]+$ ]] || return 1
+  [[ -f "$file" ]] || return 1
+  while IFS= read -r line; do
+    if [[ "$line" =~ Interface\ Name:\ (utun[0-9]{1,3})([^0-9]|$) ]]; then
+      name="${BASH_REMATCH[1]}"
+    fi
+  done < <(tail -c +"$offset" "$file" 2>/dev/null || true)
+  [[ -n "$name" ]] || return 1
+  printf '%s\n' "$name"
+}
+
+if [[ "${1:-}" == "--discover-tun-if" ]]; then
+  discover_tun_if "${2:-}" "${3:-}"
+  exit $?
+fi
+
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PIDFILE=/var/run/zju-connect.pid
 # 隧道真正可用（utun 就绪、初始 /32 路由写好）后才写这个标记。
@@ -19,7 +40,8 @@ ACTIVE_DNS_FILE=/var/run/zju-connect.dns.active
 
 : "${VPN_SERVER:?缺少服务器地址}"
 VPN_PORT="${VPN_PORT:-4430}"
-VPN_IF="${VPN_IF:-utun4}"
+# 配置里的 TUN_IF 不代表内核会分配同名网卡。等日志里的 Interface Name 再赋值。
+unset VPN_IF
 SOCKS_BIND="${SOCKS_BIND:-127.0.0.1:1090}"
 HTTP_BIND="${HTTP_BIND:-127.0.0.1:1091}"
 # 两个功能的实现方（由配置里的 dnsMode / multiLine 决定，默认都走本脚本）
@@ -111,6 +133,8 @@ else
   MULTI_ARG="-disable-multi-line"
 fi
 echo "modes: dns=$DNS_MODE multi-line=$MULTI_LINE" >> "$LOG"
+# 只认这次启动之后的 Interface Name，避免读到上一会话的 utun。
+LOG_OFFSET=$(( $(/usr/bin/stat -f%z "$LOG") + 1 ))
 
 "$DIR/zju-connect" -server "$VPN_SERVER" -port "$VPN_PORT" -username "$VPN_ACCOUNT" \
   -disable-zju-config -remote-dns-server auto \
@@ -151,19 +175,27 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 0' TERM INT
 
-# 等 utun 出现；期间如果 zju-connect 已经退出（如认证失败），立刻失败返回，
-# 不要让包装脚本继续空等 40+20 秒、把状态误报成“连接中”。
+# 等 zju-connect 打出实际网卡并在系统里可见。认证失败时它会先退出，
+# 不要空等 40 秒把状态误报成“连接中”。
 UTUN_OK=no
+SEEN_IF=""
 for _ in $(seq 1 40); do
-  if ifconfig "$VPN_IF" >/dev/null 2>&1; then UTUN_OK=yes; break; fi
+  if SEEN_IF=$(discover_tun_if "$LOG" "$LOG_OFFSET"); then
+    if ifconfig "$SEEN_IF" >/dev/null 2>&1; then
+      VPN_IF="$SEEN_IF"
+      echo "using tun interface $VPN_IF" >> "$LOG"
+      UTUN_OK=yes
+      break
+    fi
+  fi
   if ! /bin/kill -0 "$VPN_PID" 2>/dev/null; then
-    echo "zju-connect exited before tun interface $VPN_IF appeared" >> "$LOG"
+    echo "zju-connect exited before its tun interface appeared" >> "$LOG"
     exit 1
   fi
   sleep 1
 done
 if [[ "$UTUN_OK" != yes ]]; then
-  echo "tun interface $VPN_IF did not appear within 40s" >> "$LOG"
+  echo "tun interface ${SEEN_IF:-unknown} did not appear within 40s" >> "$LOG"
   exit 1
 fi
 
