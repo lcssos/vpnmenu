@@ -61,8 +61,18 @@ if [[ ! -f "$ASSETS/VPNMenu.icns" ]]; then
 fi
 
 # ---------- App 本体 ----------
+# 新版 CommandLineTools 的 Swift 兼容库只保留 arm64 切片，无法为 macOS 11 链接
+# x86_64；检测到这种情况时把 x86_64 切片的最低版本退到无需兼容库的 macOS 13。
+X86_MIN="11.0"
+SWIFT_LIBDIR="$(cd "$(dirname "$(xcrun --find swiftc)")/../lib/swift/macosx" 2>/dev/null && pwd || true)"
+if [[ -n "$SWIFT_LIBDIR" ]] && \
+   ! lipo -archs "$SWIFT_LIBDIR/libswiftCompatibility56.a" 2>/dev/null | grep -qw x86_64; then
+  X86_MIN="13.0"
+  echo "提示：工具链缺少 x86_64 的 Swift 兼容库，x86_64 最低版本改为 macOS ${X86_MIN}"
+fi
+
 echo "== 编译 x86_64"
-swiftc -O -swift-version 5 -target x86_64-apple-macos11.0 \
+swiftc -O -swift-version 5 -target "x86_64-apple-macos${X86_MIN}" \
   -framework Cocoa -framework Security -framework Network -framework SystemConfiguration \
   -o "$BUILD/VPNMenu-x86_64" "${SOURCES[@]}"
 
