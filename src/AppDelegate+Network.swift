@@ -27,9 +27,10 @@ extension AppDelegate {
         return nil
     }
 
-    /// 统一入口：网络变化、脚本健康检查失败都走这里。做防抖/冷却，避免
-    /// Wi-Fi 抖动时连续重连。
-    func requestReconnect(reason: String) {
+    /// 统一入口：网络变化、隧道进程意外退出都走这里。做防抖/冷却，避免
+    /// Wi-Fi 抖动或连续 panic 时反复重连。
+    func requestReconnect(reason: String,
+                          busyTitle: String = "VPN：网络变化，正在重连…") {
         guard !quitting, desiredProfileID != nil else { return }
         // 网络回调和刷新兜底可能重复触发，只在第一次进入排队时记日志
         if !pendingNetworkReconnect && !reconnectScheduled {
@@ -45,7 +46,7 @@ extension AppDelegate {
             schedulePendingReconnect()
             return
         }
-        performReconnect()
+        performReconnect(busyTitle: busyTitle)
     }
 
     func schedulePendingReconnect() {
@@ -61,7 +62,7 @@ extension AppDelegate {
 
     /// 网络切换会换掉底层 TCP 的源地址，旧会话没法恢复（zju-connect 自己重拨
     /// 还会 panic）。唯一可靠的办法是完整断开再连接。
-    private func performReconnect() {
+    private func performReconnect(busyTitle: String) {
         guard !busy, !waitingReady, !quitting, let sel = desiredSelection() else {
             pendingNetworkReconnect = false
             return
@@ -89,7 +90,7 @@ extension AppDelegate {
         logLine("auto-reconnect \(consecutiveReconnects)/3: \(sel.profile.name) (\(sel.id)) "
                 + "network \(connectSignature.isEmpty ? "-" : connectSignature) -> "
                 + "\(now.isEmpty ? "-" : now)")
-        beginBusy("VPN：网络变化，正在重连…")
+        beginBusy(busyTitle)
 
         DispatchQueue.global().async {
             let (code, out) = run("/usr/bin/sudo", ["-n", backend.disconnectScript])
@@ -109,5 +110,24 @@ extension AppDelegate {
     /// 由 NetworkMonitor 在主线程调用。
     func networkPathChanged() {
         requestReconnect(reason: "network changed")
+    }
+
+    /// 由 TunnelProcessWatcher 在主线程调用：包装脚本（zju-connect）意外退出。
+    /// 注意 pidfile 里是包装脚本 PID，v1.5 的 zc-tun.sh 用 `wait` 阻塞，
+    /// panic 后会立即收尾退出，所以这里收到事件时隧道已经不可用了。
+    func tunnelProcessExited() {
+        guard !quitting else { return }
+        let shouldReconnect = desiredProfileID != nil && !userDisconnected
+            && !busy && !waitingReady
+        logLine("tunnel process exited (auto-reconnect=\(shouldReconnect))")
+        if shouldReconnect {
+            // 先不 refresh：重连流程自己会跑 zc-vpn-off 收尾，避免和
+            // repairStaleStateIfIdle 里的兜底还原并发改 DNS。
+            requestReconnect(reason: "tunnel process exited",
+                             busyTitle: "VPN：连接中断，正在重连…")
+            if !busy { refresh() }  // 冷却期内没立刻重连时，先把图标纠正过来
+        } else {
+            refresh()
+        }
     }
 }

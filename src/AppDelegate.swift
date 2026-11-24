@@ -28,6 +28,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // 按连接状态缓存模板图标，避免每次刷新重复生成 SF Symbol 位图
     var iconCache: [String: NSImage] = [:]
     var tunnelBackend: VPNBackend?
+    // 隧道进程退出监听：包装脚本一退出就 refresh，不依赖定时轮询
+    var processWatcher: TunnelProcessWatcher?
 
     // 网络切换后的自动重连（见 AppDelegate+Network.swift）
     var networkMonitor: NetworkMonitor?
@@ -98,6 +100,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         item.menu = menu
 
+        let watcher = TunnelProcessWatcher()
+        watcher.onExit = { [weak self] in
+            self?.tunnelProcessExited()
+        }
+        processWatcher = watcher
+
         // 监听物理网络变化：Wi-Fi / 有线切换后底层 TCP 已失效，需要完整重连。
         networkMonitor = NetworkMonitor { [weak self] in
             self?.networkPathChanged()
@@ -118,13 +126,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // 暂时停用 5 秒状态轮询（需要时取消注释即可恢复）。
-        // 注意：停用后，外部启停隧道、进程崩溃、脚本健康标记、配置目录直改等
-        // 都不会被自动发现；只有菜单操作、连接/断开收尾、网络变化回调才会 refresh。
-        // 5 秒轮询：状态变化（外部连接/退出、panic 后的 DNS 修复）最长延迟 5 秒。
-        // tolerance 允许系统把这几次唤醒合并到别的定时器上，省电；代价是再多最多 1 秒延迟。
+        // 轮询保持停用：稳态下隧道进程退出由 TunnelProcessWatcher 的 NOTE_EXIT
+        // 事件立即发现，网络变化由 NetworkMonitor 驱动。只有外部 CLI 启停隧道、
+        // 直接改配置文件这类场景不会自动反映（下次 refresh 才会更新）。
+        // 需要兜底时取消下面注释即可恢复 5 秒轮询：
         // timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
-        //     // 轮询里的临时字符串/字典/文件内容在下一次 tick 前就释放，不留在 autorelease 池里
         //     autoreleasepool { self?.refresh() }
         // }
         // timer?.tolerance = 1.0
@@ -153,6 +159,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let live = BackendRegistry.live()
         let processAlive = live != nil
         let connected = live?.status.ready ?? false
+        // 包装脚本退出时立刻刷新并视情况重连；操作进行中交给各自流程处理，
+        // 避免把主动断开、自动重连里旧会话的退出误判成崩溃。
+        updateProcessWatcher(pid: live?.status.pid)
         // 残留状态修复只在完全没有隧道时做；连接中 / 已连接都不能碰
         if !processAlive {
             BackendRegistry.repairStaleStatesIfIdle(busy: busy)
@@ -196,6 +205,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             stopBusyAnimation()
             statusLine.title = profiles.isEmpty ? "VPN：未配置" : "VPN：未连接"
             setIcon(connected: false)
+        }
+    }
+
+    /// 只在稳定状态下监听进程退出。连接中/断开中/退出中由各自流程负责，
+    /// 此时清掉监听，避免旧会话的退出事件触发多余的重连。
+    private func updateProcessWatcher(pid: pid_t?) {
+        guard let watcher = processWatcher else { return }
+        if busy || waitingReady || quitting {
+            watcher.stop()
+        } else if let pid {
+            watcher.watch(pid)
+        } else {
+            watcher.stop()
         }
     }
 

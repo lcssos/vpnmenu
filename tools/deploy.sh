@@ -67,8 +67,19 @@ if pgrep -f "$APP_EXE" >/dev/null 2>&1; then
   done
   pkill -KILL -f "$APP_EXE" 2>/dev/null || true
 fi
+# 覆盖二进制后不能直接 kickstart：launchd 缓存的 LWCR（代码签名约束）仍指向旧版本，
+# 新进程会被以 “SIGKILL (Code Signature Invalid) / Launch Constraint Violation” 杀掉。
+# 必须先 bootout 再 bootstrap，让 launchd 按新二进制重新计算约束。
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 if launchctl print "gui/$UID_NUM/$LABEL" >/dev/null 2>&1; then
-  launchctl kickstart -k "gui/$UID_NUM/$LABEL" || open -a "$DST"
+  launchctl bootout "gui/$UID_NUM/$LABEL" 2>/dev/null || true
+  for _ in $(seq 1 25); do
+    launchctl print "gui/$UID_NUM/$LABEL" >/dev/null 2>&1 || break
+    sleep 0.2
+  done
+fi
+if [[ -f "$PLIST" ]]; then
+  launchctl bootstrap "gui/$UID_NUM" "$PLIST" 2>/dev/null || open -a "$DST"
 else
   open -a "$DST"
 fi

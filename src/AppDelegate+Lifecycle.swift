@@ -62,6 +62,7 @@ extension AppDelegate {
         guard busy || BackendRegistry.anyActiveProcess() else { return .terminateNow }
         guard !quitting else { return .terminateLater }
         quitting = true
+        processWatcher?.stop()
         clearDesiredProfile()
         networkMonitor?.stop()
         beginBusy("VPN：断开中…")

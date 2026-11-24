@@ -91,13 +91,15 @@ root 脚本只从 stdin 读白名单参数，不 `source`/`eval` 用户可写文
 | 连接中 / 断开中 | 实心锁与空心锁每 0.7 秒交替 | 等待 utun 与路由就绪 / 等待进程退出；连接中可以点「断开」取消 |
 | 已连接 | 实心锁 | 内网资源可访问 |
 
-App 不做定时轮询，只在启动、连接/断开收尾、配置变更和网络变化回调时刷新状态：
-读 `/var/run/zju-connect.pid` 并 `kill(0)` 判断隧道进程是否存活，全部在 App 内完成，
-不启动子进程。命令行校验只在首次见到某个进程实例时做一次；之后用 `sysctl` 读取的
-进程启动时间识别 PID 复用，所以稳态下没有额外 fork。
+App 不做定时轮询，状态刷新由事件驱动：启动、连接/断开收尾、配置变更、网络变化回调，
+以及 `TunnelProcessWatcher` 对包装脚本 PID 的 `NOTE_EXIT` 监听。状态判断读
+`/var/run/zju-connect.pid` 并 `kill(0)`，全部在 App 内完成，不启动子进程。命令行校验
+只在首次见到某个进程实例时做一次；之后用 `sysctl` 读取的进程启动时间识别 PID 复用，
+所以稳态下没有额外 fork。
 
-因此外部启停隧道或进程崩溃后，菜单栏文字不会自己更新；执行一次「断开」或其它会
-收尾的操作后即刷新到实际状态。
+包装脚本退出（zju-connect panic、被终止等）时 App 会立即刷新图标；如果这份连接是
+明确发起过且没有手动断开的，还会自动执行「先断开再连接」。用 CLI 启停隧道同样会被
+视为“期望保持连接”而自动重连，要彻底停掉请用菜单「断开」。
 
 “已连接”以 `/var/run/zju-connect.ready` 为准：包装脚本要等 utun 就绪、初始 `/32` 路由
 写好后才会写入这个标记。认证失败或 utun 没出现时脚本会快速退出，不会先显示已连接。
@@ -140,6 +142,7 @@ src/Keychain.swift      钥匙串凭据
 src/Process.swift       外部命令执行
 src/CommandLineTool.swift  命令行辅助模式
 src/SingleInstance.swift   单实例锁
+src/TunnelProcessWatcher.swift  包装脚本退出的 NOTE_EXIT 监听（不轮询）
 src/Info.plist          bundle 元信息（LSUIElement=true，CFBundleIconFile=VPNMenu）
 runtime/vpn/            运行期脚本（zc-*.sh、install.sh、组件说明）
 docs/profile.example.json  配置格式示例（占位值，可直接作为导入模板）
@@ -331,8 +334,9 @@ tools/deploy.sh --build    # 先构建再部署
 ```
 
 脚本流程：`ditto` 覆盖 `/Applications/VPNMenu.app` → 跑 `install.sh`（chown root、
-写 sudoers、停旧实例）→ 重启菜单栏进程；部署前若 VPN 是连接状态，会用本机配置和
-钥匙串凭据自动恢复连接。会弹一次管理员密码。
+写 sudoers、停旧实例）→ **bootout + bootstrap** 重启 LaunchAgent（覆盖二进制后
+直接 kickstart 会因 launchd 缓存的旧代码签名约束被 `SIGKILL`）→ 恢复连接；
+部署前若 VPN 是连接状态，会用本机配置和钥匙串凭据自动恢复连接。会弹一次管理员密码。
 
 也可以直接在菜单里点「重新安装组件…」。
 
@@ -391,6 +395,10 @@ xattr -dr com.apple.quarantine /Applications/VPNMenu.app
   系统 DNS 只设置在**当前有 IP 的网络服务**上；切换网络后由自动重连流程重新设置。
 - **网络切换会有约 10 秒中断**：检测到网卡地址/默认路由变化后要等 3 秒确认稳定，再断开
   重连；连续自动重连 3 次仍未稳定时会停止，需要手动点「连接」。
+- **zju-connect panic 会自动重连**：底层连接 EOF 后 zju-connect 重拨可能 panic
+  （上游 `stack/tun/stack.go`），包装脚本随即退出。App 通过 `NOTE_EXIT` 立即刷新并
+  自动重连；连续 3 次未稳定会停止。崩溃栈记录在
+  `~/Library/Logs/VPNMenu/zju-connect.log`。
 - **两层检测都依赖“旧源地址消失”**：同一台路由器的不同 SSID 分配了相同 IP、默认路由
   也没变时，签名不变；如果此时底层连接碰巧已经不可达，App 无法判断，仍需在菜单里
   手动断开再连接。绝大多数跨网络切换都能自动恢复。
